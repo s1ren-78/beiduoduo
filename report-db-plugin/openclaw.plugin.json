@@ -1,0 +1,17 @@
+{
+  "id": "openclaw-report-db",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "baseUrl": {
+        "type": "string",
+        "default": "http://127.0.0.1:8788"
+      },
+      "timeoutMs": {
+        "type": "number",
+        "default": 30000
+      }
+    }
+  }
+}

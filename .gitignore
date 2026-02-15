@@ -1,0 +1,42 @@
+# macOS
+.DS_Store
+._*
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Environment & secrets
+.env
+*.env.local
+
+# Database & runtime data
+数据库/_index/beiduoduo.db
+数据库/_index/beiduoduo.db-shm
+数据库/_index/beiduoduo.db-wal
+数据库/_index/logs/
+数据库/_index/raw/
+数据库/_index/checkpoints/
+数据库/_index/exports/
+
+# PDF / large binary reports (tracked separately)
+数据库/**/*.pdf
+数据库/**/*.pptx
+
+# Node
+node_modules/
+
+# Symlinks to user-local dirs
+.openclaw
+openclaw-workspace
+
+# Temp
+.tmp/
+
+# Claude Code local settings & session data
+.claude/settings.local.json
+.claude/projects/
+数据库/.claude/

@@ -1,0 +1,10 @@
+-- Enable Feishu sync scope via whitelist
+-- entry_type: space | folder | doc
+
+INSERT INTO report_whitelist(entry_type, entry_token, label, enabled)
+VALUES
+  ('space', 'space_xxx', '投研空间', true),
+  ('folder', 'fldcn_xxx', '研报文件夹', true),
+  ('doc', 'doccn_xxx', '关键文档', true)
+ON CONFLICT (entry_token)
+DO UPDATE SET enabled = EXCLUDED.enabled, label = EXCLUDED.label, updated_at = NOW();
