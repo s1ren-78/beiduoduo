@@ -153,6 +153,14 @@ def render_bar_chart(
     return _finalize(fig)
 
 
+_NYSE_SYMBOLS = frozenset({
+    "IBM", "GE", "GS", "JPM", "BAC", "WFC", "C", "MS", "V", "MA",
+    "JNJ", "PG", "KO", "PEP", "WMT", "DIS", "NKE", "MCD", "BA",
+    "CVX", "XOM", "CAT", "MMM", "HD", "UNH", "PFE", "MRK", "ABT",
+    "T", "VZ", "GM", "F", "BRK.A", "BRK.B", "BABA", "TSM", "COIN",
+})
+
+
 def _tv_symbol(symbol: str, asset_class: str) -> str:
     """Map symbol + asset_class to TradingView exchange:symbol format."""
     s = symbol.upper()
@@ -160,7 +168,8 @@ def _tv_symbol(symbol: str, asset_class: str) -> str:
         s = s.replace("USDT", "").replace("USD", "")
         return f"BINANCE:{s}USDT"
     else:
-        return f"NASDAQ:{s}"
+        exchange = "NYSE" if s in _NYSE_SYMBOLS else "NASDAQ"
+        return f"{exchange}:{s}"
 
 
 _log = logging.getLogger(__name__)

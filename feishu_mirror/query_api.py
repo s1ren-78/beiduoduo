@@ -36,8 +36,9 @@ from lib.jobs import (
     run_local_sync,
     run_market_sync,
 )
-from lib.brave_search import BraveSearchClient
-from lib.chart_render import render_bar_chart, render_candlestick_chart, render_line_chart, render_multi_line_chart, render_tradingview_screenshot
+from lib.web_search import WebSearchClient
+from lib.web_reader import fetch_page
+from lib.chart_render import render_bar_chart, render_line_chart, render_multi_line_chart, render_tradingview_screenshot
 from lib.feishu_api import FeishuAuth, FeishuClient
 from lib.feishu_bitable import FeishuBitableClient
 from lib.market_api import ArtemisClient, YFinanceClient
@@ -83,6 +84,7 @@ ensure_runtime_dirs(settings)
 db = DB(settings.database_url)
 ensure_schema(db, Path(__file__).parent / "schema.sql")
 
+logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 app = FastAPI(title="Beiduoduo Report Query API", version="1.0.0")
 _log = logging.getLogger(__name__)
 
@@ -108,8 +110,8 @@ def _get_feishu() -> FeishuClient:
 
 
 @lru_cache(maxsize=1)
-def _get_brave() -> BraveSearchClient:
-    return BraveSearchClient(settings.brave_search_api_key)
+def _get_web_search() -> WebSearchClient:
+    return WebSearchClient()
 
 
 def _cache_write(fn) -> None:
@@ -121,15 +123,19 @@ def _cache_write(fn) -> None:
 
 
 def _send_feishu_image(png: bytes, rid: str, rid_type: str, result: dict[str, Any]) -> None:
-    """Upload PNG to Feishu and send to rid. Mutates result dict on success."""
+    """Upload PNG to Feishu and send to rid. Mutates result dict."""
     try:
         client = _get_feishu()
         image_key = client.upload_image(png)
-        client.send_image_message(rid, image_key, receive_id_type=rid_type)
+        resp = client.send_image_as_card(rid, image_key, receive_id_type=rid_type)
         result["image_key"] = image_key
         result["sent_to"] = rid
+        msg_id = resp.get("message_id", "") if isinstance(resp, dict) else ""
+        result["message_id"] = msg_id
+        _log.info("Feishu image sent OK: image_key=%s, rid=%s, message_id=%s", image_key, rid, msg_id)
     except Exception as exc:
         _log.warning("Feishu image send failed: %s", exc)
+        result["send_error"] = str(exc)
 
 
 @app.get("/health")
@@ -301,21 +307,15 @@ def market_history(
     result: dict[str, Any] = {"symbol": symbol.upper(), "asset_class": asset_class, "days": days, "data": rows}
 
     if chart and rows:
-        png = None
         try:
             png = render_tradingview_screenshot(symbol, asset_class)
-        except Exception as exc:
-            _log.warning("TradingView failed for %s, falling back to mplfinance: %s", symbol, exc)
-            try:
-                png = render_candlestick_chart(rows, f"{symbol.upper()} K线图")
-            except Exception as exc2:
-                _log.warning("mplfinance fallback also failed: %s", exc2)
-
-        if png:
             result["chart_base64"] = base64.b64encode(png).decode()
             rid = chat_id or open_id
             if rid:
                 _send_feishu_image(png, rid, "chat_id" if chat_id else "open_id", result)
+        except Exception as exc:
+            _log.warning("TradingView screenshot failed for %s: %s", symbol, exc)
+            result["chart_error"] = f"截图失败: {exc}"
 
     return result
 
@@ -382,13 +382,20 @@ def web_search(
     country: Optional[str] = Query(default=None, min_length=2, max_length=2),
     search_lang: Optional[str] = Query(default=None, min_length=2, max_length=5),
 ):
-    """Web search via Brave Search API."""
-    if not settings.brave_search_api_key:
-        raise HTTPException(status_code=503, detail="BRAVE_SEARCH_API_KEY not configured")
-    return _get_brave().search(
-        q=q, count=count, offset=offset,
+    """Web search via DuckDuckGo (free, no API key)."""
+    return _get_web_search().search(
+        q=q, count=count,
         freshness=freshness, country=country, search_lang=search_lang,
     )
+
+
+@app.get("/v1/web/read")
+def web_read(
+    url: str = Query(..., min_length=1),
+    max_chars: int = Query(8000, ge=1000, le=30000),
+):
+    """Fetch a web page and extract text content using Playwright."""
+    return fetch_page(url, max_chars=max_chars)
 
 
 @app.get("/v1/watchlist")
@@ -422,21 +429,20 @@ def chart_render(payload: ChartRenderRequest):
     if isinstance(data, str):
         data = _json.loads(data)
 
-    png = None
-
-    # Priority: if symbol is provided, always use TradingView screenshot
+    # Route 1: symbol provided → TradingView screenshot (唯一路径，不 fallback)
     if payload.symbol:
-        try:
-            png = render_tradingview_screenshot(payload.symbol, payload.asset_class or "stock")
-        except Exception:
-            pass  # fall through to local rendering
-
-    # Fallback: local rendering
-    if png is None:
+        png = render_tradingview_screenshot(payload.symbol, payload.asset_class or "stock")
+    else:
+        # Route 2: no symbol → local rendering for non-price charts only
+        if payload.chart_type == "candlestick":
+            raise HTTPException(
+                status_code=400,
+                detail="candlestick chart requires 'symbol' (uses TradingView screenshot)",
+            )
         if not data:
             raise HTTPException(
                 status_code=400,
-                detail=f"chart_type={payload.chart_type} requires 'data' when TradingView screenshot is unavailable",
+                detail=f"chart_type={payload.chart_type} requires 'data'",
             )
         if payload.chart_type == "line":
             png = render_line_chart(data, payload.title, y_label=payload.y_label)
@@ -444,8 +450,6 @@ def chart_render(payload: ChartRenderRequest):
             png = render_multi_line_chart(data, payload.title, y_label=payload.y_label)
         elif payload.chart_type == "bar":
             png = render_bar_chart(data, payload.title, y_label=payload.y_label)
-        elif payload.chart_type == "candlestick":
-            png = render_candlestick_chart(data, payload.title, y_label=payload.y_label)
         else:
             raise HTTPException(status_code=400, detail=f"unknown chart_type: {payload.chart_type}")
 

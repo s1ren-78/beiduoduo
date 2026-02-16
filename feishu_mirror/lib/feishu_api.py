@@ -117,6 +117,32 @@ class FeishuClient:
             },
         )
 
+    def send_image_as_card(
+        self,
+        receive_id: str,
+        image_key: str,
+        title: str = "",
+        receive_id_type: str = "open_id",
+    ) -> dict:
+        """Send image embedded in an interactive card (works around msg_type=image display issues)."""
+        card = {
+            "schema": "2.0",
+            "body": {
+                "elements": [
+                    {
+                        "tag": "img",
+                        "img_key": image_key,
+                        "alt": {"tag": "plain_text", "content": title or "chart"},
+                    }
+                ]
+            },
+        }
+        if title:
+            card["header"] = {
+                "title": {"tag": "plain_text", "content": title},
+            }
+        return self.send_card_message(receive_id, card, receive_id_type=receive_id_type)
+
     def send_card_message(
         self,
         receive_id: str,

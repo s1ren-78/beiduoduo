@@ -23,7 +23,7 @@ report-db-plugin/       # OpenClaw 插件 (Node.js)
 #### 1. 重启 API + 跑冒烟测试
 
 ```bash
-cd /Users/beiduoudo/Desktop/贝多多/feishu_mirror
+cd /Users/beiduoudo/beiduoduo/feishu_mirror
 python3 tests/smoke_test.py --restart
 ```
 
@@ -100,7 +100,7 @@ python3 tests/smoke_test.py --quick
 ```bash
 # Query API
 lsof -ti:8788 | xargs kill -9    # 停
-cd feishu_mirror && nohup python3 query_api.py > ../数据库/_index/logs/query_api.log 2>&1 &  # 启
+cd /Users/beiduoudo/beiduoduo/feishu_mirror && nohup python3 query_api.py > ../数据库/_index/logs/query_api.log 2>&1 &  # 启
 
 # Gateway
 /Users/beiduoudo/.openclaw/bin/openclaw gateway restart

@@ -15,27 +15,6 @@ function resolveConfig(api) {
   return { baseUrl, timeoutMs };
 }
 
-function resolveFeishuOwner(api) {
-  // Extract the owner's open_id from openclaw config for auto-sending images
-  try {
-    // Try multiple config paths
-    const paths = [
-      api?.config?.commands?.ownerAllowFrom,
-      api?.config?.plugins?.entries?.["openclaw-report-db"]?.config?.ownerAllowFrom,
-    ];
-    for (const ownerList of paths) {
-      if (!Array.isArray(ownerList)) continue;
-      for (const entry of ownerList) {
-        if (typeof entry === "string" && entry.startsWith("feishu:ou_")) {
-          return entry.replace("feishu:", "");
-        }
-      }
-    }
-  } catch (_) {}
-  // Fallback: read from env or hardcoded owner
-  return process.env.FEISHU_OWNER_OPEN_ID || "ou_ec332c4e35a82229099b7a04b89488ee";
-}
-
 async function request(api, path, options = {}) {
   const { baseUrl, timeoutMs } = resolveConfig(api);
   const controller = new AbortController();
@@ -121,15 +100,9 @@ const WebSearchSchema = Type.Object({
   search_lang: Type.Optional(Type.String()),
 });
 
-const ChartRenderSchema = Type.Object({
-  chart_type: Type.Union([Type.Literal("line"), Type.Literal("multi_line"), Type.Literal("bar"), Type.Literal("candlestick")]),
-  title: Type.String({ minLength: 1 }),
-  data: Type.Optional(Type.Any()),
-  y_label: Type.Optional(Type.String()),
-  symbol: Type.Optional(Type.String()),
-  asset_class: Type.Optional(Type.Union([Type.Literal("stock"), Type.Literal("crypto")])),
-  chat_id: Type.Optional(Type.String()),
-  open_id: Type.Optional(Type.String()),
+const WebReadSchema = Type.Object({
+  url: Type.String({ minLength: 1 }),
+  max_chars: Type.Optional(Type.Number({ minimum: 1000, maximum: 30000 })),
 });
 
 const BitableCreateSchema = Type.Object({
@@ -221,7 +194,7 @@ const plugin = {
       {
         name: "web_search",
         label: "Web Search",
-        description: "Search the web via Brave Search API. Use for real-time info, news, research. Supports freshness filter: pd=24h, pw=7days, pm=30days, py=1year.",
+        description: "Search the web via DuckDuckGo. Use for finding relevant pages. Supports freshness filter: pd=24h, pw=7days, pm=30days, py=1year. To read full page content, use web_read with the URL.",
         parameters: WebSearchSchema,
         async execute(_toolCallId, params) {
           const query = new URLSearchParams();
@@ -234,6 +207,22 @@ const plugin = {
         },
       },
       { name: "web_search" },
+    );
+
+    api.registerTool(
+      {
+        name: "web_read",
+        label: "Web Read",
+        description: "Fetch a web page and extract its full text content using Playwright. Use after web_search to read the actual page content. Pass the URL from search results.",
+        parameters: WebReadSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("url", params.url);
+          if (params.max_chars) query.set("max_chars", String(params.max_chars));
+          return json(await request(api, `/v1/web/read?${query.toString()}`));
+        },
+      },
+      { name: "web_read" },
     );
 
     // ── Market & On-chain Tools ──
@@ -258,23 +247,15 @@ const plugin = {
       {
         name: "market_get_history",
         label: "Market History",
-        description: "Get historical OHLCV price data for a stock or crypto asset. Automatically renders a candlestick (K-line) chart and sends it to the user's Feishu chat.",
+        description: "Get historical OHLCV data for a stock or crypto. Only use when the user explicitly asks for data analysis — for price trend viewing, send a TradingView link instead (see TOOLS.md).",
         parameters: MarketHistorySchema,
         async execute(_toolCallId, params) {
           const query = new URLSearchParams();
           query.set("symbol", params.symbol);
           query.set("asset_class", params.asset_class);
           if (params.days) query.set("days", String(params.days));
-          // Auto-send candlestick chart to the bot owner via Feishu
-          const ownerOpenId = resolveFeishuOwner(api);
-          if (ownerOpenId) query.set("open_id", ownerOpenId);
-          const result = await request(api, `/v1/market/history?${query.toString()}`);
-          // Strip chart_base64 from tool result to save context tokens
-          if (result && result.chart_base64) {
-            result.chart_sent = !!result.sent_to;
-            delete result.chart_base64;
-          }
-          return json(result);
+          query.set("chart", "false");
+          return json(await request(api, `/v1/market/history?${query.toString()}`));
         },
       },
       { name: "market_get_history" },
@@ -346,45 +327,7 @@ const plugin = {
       { name: "onchain_liquidity" },
     );
 
-    // ── Chart & Bitable Tools ──
-
-    api.registerTool(
-      {
-        name: "chart_render",
-        label: "Chart Render",
-        description: "Render a chart as PNG image. For candlestick: pass symbol + asset_class to get a TradingView screenshot (best quality). For line/multi_line/bar: pass data array. Optionally send to Feishu chat.",
-        parameters: ChartRenderSchema,
-        async execute(_toolCallId, params) {
-          const body = {
-            chart_type: params.chart_type,
-            title: params.title,
-          };
-          if (params.data) body.data = params.data;
-          if (params.symbol) body.symbol = params.symbol;
-          if (params.asset_class) body.asset_class = params.asset_class;
-          if (params.y_label) body.y_label = params.y_label;
-          // Auto-inject Feishu target: use explicit chat_id, or fallback to owner open_id
-          if (params.chat_id) {
-            body.chat_id = params.chat_id;
-          } else {
-            const ownerOpenId = resolveFeishuOwner(api);
-            if (ownerOpenId) body.open_id = ownerOpenId;
-          }
-          const result = await request(api, "/v1/chart/render", {
-            method: "POST",
-            body: JSON.stringify(body),
-          });
-          // Strip image_base64 to avoid blowing up context window
-          if (result && result.image_base64) {
-            result.chart_generated = true;
-            result.chart_sent = !!result.sent_to;
-            delete result.image_base64;
-          }
-          return json(result);
-        },
-      },
-      { name: "chart_render" },
-    );
+    // ── Bitable ──
 
     api.registerTool(
       {

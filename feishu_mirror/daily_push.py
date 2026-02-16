@@ -18,10 +18,13 @@ from pathlib import Path
 
 from lib.config import load_settings
 from lib.feishu_api import FeishuAuth, FeishuClient
+from lib.db import DB
 from lib.ranking_data import (
     build_ranking_card,
     fetch_crypto_rankings,
+    fetch_market_pulse,
     fetch_nasdaq_rankings,
+    seed_default_pulse,
 )
 
 OWNER_OPEN_ID = "ou_ec332c4e35a82229099b7a04b89488ee"
@@ -39,6 +42,8 @@ def main() -> None:
     args = parser.parse_args()
 
     settings = load_settings(str(Path(__file__).parent / ".env"))
+    db = DB(settings.database_url)
+    seed_default_pulse(db)
     date_str = datetime.now().strftime("%Y-%m-%d")
 
     # ── Fetch rankings ──
@@ -73,8 +78,17 @@ def main() -> None:
         logger.error("All data fetches failed, nothing to send")
         sys.exit(1)
 
+    # ── Fetch market pulse (from watchlist label=pulse) ──
+    pulse = None
+    try:
+        logger.info("Fetching market pulse...")
+        pulse = fetch_market_pulse(settings.artemis_api_key, db=db)
+        logger.info("Market pulse: %d items", len(pulse))
+    except Exception as e:
+        logger.warning("Market pulse fetch failed (non-fatal): %s", e)
+
     # ── Build card ──
-    card = build_ranking_card(rankings, date_str)
+    card = build_ranking_card(rankings, date_str, pulse=pulse)
 
     if args.dry_run:
         print(json.dumps(card, ensure_ascii=False, indent=2))

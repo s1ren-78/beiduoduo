@@ -1,4 +1,4 @@
-# 飞书全量导出到本地 + OpenClaw 本地预读实施路线
+# 飞书全量导出到本地 + OpenClaw 本地预读实施路
 
 ## 1. 目标
 
@@ -143,7 +143,7 @@ OpenClaw / 前端
 
 ## 8. 你下一步直接做什么
 
-1. 先补齐飞书应用 scopes。
+1. 先补齐飞书应用 scopes
 2. 在本机起 PostgreSQL。
 3. 执行 `feishu_mirror/schema.sql`。
 4. 开始跑全量导出任务。

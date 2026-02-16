@@ -1,0 +1,41 @@
+{
+  "kols": [
+    {
+      "id": "brian_armstrong",
+      "name": "Brian Armstrong",
+      "title": "Coinbase CEO",
+      "search_queries": [
+        "\"Brian Armstrong\" CEO crypto",
+        "\"Brian Armstrong\" Coinbase statement"
+      ],
+      "category": "crypto"
+    },
+    {
+      "id": "satya_nadella",
+      "name": "Satya Nadella",
+      "title": "Microsoft CEO",
+      "search_queries": [
+        "\"Satya Nadella\" CEO statement",
+        "\"Satya Nadella\" Microsoft AI"
+      ],
+      "category": "tech"
+    },
+    {
+      "id": "vitalik_buterin",
+      "name": "Vitalik Buterin",
+      "title": "Ethereum Co-founder",
+      "search_queries": [
+        "\"Vitalik Buterin\" Ethereum",
+        "\"Vitalik Buterin\" opinion"
+      ],
+      "category": "crypto"
+    }
+  ],
+  "settings": {
+    "max_search_results_per_query": 5,
+    "max_scrape_per_person": 3,
+    "scrape_max_chars": 6000,
+    "summary_max_points": 3,
+    "claude_model": "claude-haiku-4-5-20251001"
+  }
+}

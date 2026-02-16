@@ -10,23 +10,6 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# ── Top crypto tokens tracked (Artemis identifiers) ──
-
-TOP_CRYPTO_TOKENS: list[str] = [
-    "bitcoin", "ethereum", "solana", "cardano", "avalanche",
-    "polkadot", "chainlink", "uniswap", "aave", "arbitrum",
-    "optimism", "polygon", "near", "aptos", "sui",
-    "celestia", "injective", "sei", "starknet", "jupiter",
-    "render", "filecoin", "the-graph", "lido", "eigenlayer",
-    "maker", "compound", "synthetix", "curve", "pendle",
-    "ethena", "jito", "raydium", "ondo", "worldcoin",
-    "pepe", "dogecoin", "shiba-inu", "bonk", "floki",
-    "toncoin", "tron", "litecoin", "bitcoin-cash", "stellar",
-    "hedera", "algorand", "cosmos", "internet-computer", "mantle",
-]
-
-BATCH_SIZE = 10  # tokens per Artemis API call
-
 
 # ── Data classes ──
 
@@ -48,30 +31,11 @@ class RankingResult:
     error: str | None = None
 
 
-# ── Helpers ──
-
-
-def _build_nasdaq_items(parsed: list[tuple]) -> list[RankingItem]:
-    """Convert parsed NASDAQ rows to ranked items."""
-    return [
-        RankingItem(rank=i, symbol=row.get("symbol", ""), name=row.get("name", "")[:20], price=price, change_pct=pct)
-        for i, (row, price, pct) in enumerate(parsed, 1)
-    ]
-
-
-def _build_crypto_items(quotes: list[dict[str, Any]]) -> list[RankingItem]:
-    """Convert crypto quote dicts to ranked items."""
-    return [
-        RankingItem(rank=i, symbol=q["symbol"].upper(), name=q["symbol"].replace("-", " ").title(), price=q["price"], change_pct=q["change_pct"])
-        for i, q in enumerate(quotes, 1)
-    ]
-
-
-# ── NASDAQ ──
+# ── NASDAQ (market-cap top 100 → change % top 5) ──
 
 
 def fetch_nasdaq_rankings() -> tuple[RankingResult, RankingResult]:
-    """Fetch NASDAQ top 10 gainers and losers from public screener API."""
+    """Fetch NASDAQ market-cap top 100, then pick top 5 gainers & losers."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     gainers = RankingResult(category="nasdaq_gainers", fetch_time=now)
     losers = RankingResult(category="nasdaq_losers", fetch_time=now)
@@ -84,7 +48,12 @@ def fetch_nasdaq_rankings() -> tuple[RankingResult, RankingResult]:
     try:
         resp = requests.get(
             "https://api.nasdaq.com/api/screener/stocks",
-            params={"exchange": "NASDAQ", "limit": 200},
+            params={
+                "exchange": "NASDAQ",
+                "limit": 100,
+                "sortcolumn": "marketCap",
+                "sortorder": "desc",
+            },
             headers=headers,
             timeout=15,
         )
@@ -92,7 +61,6 @@ def fetch_nasdaq_rankings() -> tuple[RankingResult, RankingResult]:
         data = resp.json()
         rows = data.get("data", {}).get("table", {}).get("rows", [])
 
-        # Parse all rows, sort locally (API ignores sort params)
         parsed = []
         for row in rows:
             pct_str = row.get("pctchange", "0").replace("%", "").replace(",", "")
@@ -107,10 +75,15 @@ def fetch_nasdaq_rankings() -> tuple[RankingResult, RankingResult]:
                 price = None
             parsed.append((row, price, pct))
 
-        # Top 10 gainers (highest % change) / Top 10 losers (lowest % change)
         parsed.sort(key=lambda x: x[2], reverse=True)
-        gainers.items = _build_nasdaq_items(parsed[:10])
-        losers.items = _build_nasdaq_items(parsed[-10:])
+        gainers.items = [
+            RankingItem(rank=i, symbol=r.get("symbol", ""), name=r.get("name", "")[:20], price=p, change_pct=pct)
+            for i, (r, p, pct) in enumerate(parsed[:5], 1)
+        ]
+        losers.items = [
+            RankingItem(rank=i, symbol=r.get("symbol", ""), name=r.get("name", "")[:20], price=p, change_pct=pct)
+            for i, (r, p, pct) in enumerate(parsed[-5:], 1)
+        ]
 
     except Exception as e:
         logger.error("NASDAQ fetch failed: %s", e)
@@ -120,57 +93,57 @@ def fetch_nasdaq_rankings() -> tuple[RankingResult, RankingResult]:
     return gainers, losers
 
 
-# ── Crypto ──
+# ── Crypto (CoinGecko market-cap top 100 → change % top 5) ──
 
 
-def fetch_crypto_rankings(artemis_api_key: str) -> tuple[RankingResult, RankingResult]:
-    """Fetch crypto top 10 gainers and losers using Artemis price data."""
-    from .market_api import ArtemisClient
-
+def fetch_crypto_rankings(artemis_api_key: str = "") -> tuple[RankingResult, RankingResult]:
+    """Fetch crypto market-cap top 100 via CoinGecko, then pick top 5 gainers & losers."""
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     gainers = RankingResult(category="crypto_gainers", fetch_time=now)
     losers = RankingResult(category="crypto_losers", fetch_time=now)
 
-    if not artemis_api_key:
-        gainers.error = "ARTEMIS_API_KEY not set"
-        losers.error = "ARTEMIS_API_KEY not set"
-        return gainers, losers
-
     try:
-        client = ArtemisClient(artemis_api_key)
-        end = datetime.utcnow()
-        start = end - timedelta(days=2)
+        resp = requests.get(
+            "https://api.coingecko.com/api/v3/coins/markets",
+            params={
+                "vs_currency": "usd",
+                "order": "market_cap_desc",
+                "per_page": 100,
+                "page": 1,
+                "price_change_percentage": "24h",
+                "sparkline": "false",
+            },
+            timeout=15,
+        )
+        resp.raise_for_status()
+        coins = resp.json()
 
-        # Fetch in batches
-        all_quotes: list[dict[str, Any]] = []
-        for i in range(0, len(TOP_CRYPTO_TOKENS), BATCH_SIZE):
-            batch = TOP_CRYPTO_TOKENS[i : i + BATCH_SIZE]
-            symbols_str = ",".join(batch)
-            try:
-                data = client._fetch("price", symbols_str, start, end)
-                for sym in batch:
-                    series = data.get(sym, {}).get("price", [])
-                    if isinstance(series, str):
-                        continue
-                    valid = [p for p in (series or []) if p.get("val") is not None]
-                    if len(valid) < 2:
-                        continue
-                    latest = valid[-1]["val"]
-                    prev = valid[-2]["val"]
-                    if prev and prev != 0:
-                        pct = round((latest - prev) / prev * 100, 2)
-                        all_quotes.append({
-                            "symbol": sym,
-                            "price": latest,
-                            "change_pct": pct,
-                        })
-            except Exception as e:
-                logger.warning("Artemis batch fetch failed for %s: %s", symbols_str, e)
+        valid = [
+            c for c in coins
+            if c.get("price_change_percentage_24h") is not None
+        ]
+        valid.sort(key=lambda c: c["price_change_percentage_24h"], reverse=True)
 
-        all_quotes.sort(key=lambda q: q["change_pct"], reverse=True)
-        bottom = list(reversed(all_quotes[-10:])) if len(all_quotes) >= 10 else list(reversed(all_quotes))
-        gainers.items = _build_crypto_items(all_quotes[:10])
-        losers.items = _build_crypto_items(bottom)
+        gainers.items = [
+            RankingItem(
+                rank=i,
+                symbol=c["symbol"].upper(),
+                name=c.get("name", "")[:20],
+                price=c.get("current_price"),
+                change_pct=round(c["price_change_percentage_24h"], 2),
+            )
+            for i, c in enumerate(valid[:5], 1)
+        ]
+        losers.items = [
+            RankingItem(
+                rank=i,
+                symbol=c["symbol"].upper(),
+                name=c.get("name", "")[:20],
+                price=c.get("current_price"),
+                change_pct=round(c["price_change_percentage_24h"], 2),
+            )
+            for i, c in enumerate(valid[-5:], 1)
+        ]
 
     except Exception as e:
         logger.error("Crypto rankings fetch failed: %s", e)
@@ -180,7 +153,114 @@ def fetch_crypto_rankings(artemis_api_key: str) -> tuple[RankingResult, RankingR
     return gainers, losers
 
 
-# ── Feishu Card Builder ──
+# ── Market Pulse (customizable watchlist) ──
+
+
+@dataclass
+class PulseItem:
+    symbol: str
+    name: str
+    price: float | None
+    change_pct: float | None
+    asset_class: str  # "stock" or "crypto"
+
+
+# Artemis symbol mapping for crypto pulse items
+_CRYPTO_ARTEMIS_MAP = {
+    "BTC": "bitcoin", "ETH": "ethereum", "SOL": "solana",
+    "ADA": "cardano", "AVAX": "avalanche", "DOT": "polkadot",
+    "LINK": "chainlink", "UNI": "uniswap", "AAVE": "aave",
+    "ARB": "arbitrum", "OP": "optimism",
+}
+
+DEFAULT_PULSE = [
+    # (symbol, asset_class, display_name, row)
+    ("BTC", "crypto", "BTC", 1),
+    ("ETH", "crypto", "ETH", 1),
+    ("HOOD", "stock", "Robinhood", 1),
+    ("COIN", "stock", "Coinbase", 1),
+    ("NVDA", "stock", "NVIDIA", 2),
+    ("MSFT", "stock", "Microsoft", 2),
+    ("GOOGL", "stock", "Google", 2),
+    ("META", "stock", "Meta", 2),
+]
+
+
+def seed_default_pulse(db) -> None:
+    """Seed the default 8 pulse items into the watchlist (idempotent)."""
+    from .db_market import get_watchlist, upsert_watchlist
+
+    rows = get_watchlist(db, enabled_only=False)
+    existing_pulse = {r["symbol"] for r in rows if r.get("label") == "pulse"}
+    if existing_pulse:
+        return  # already seeded
+
+    for sym, ac, display, row in DEFAULT_PULSE:
+        upsert_watchlist(db, symbol=sym, asset_class=ac, label="pulse",
+                         meta={"display": display, "row": row})
+    logger.info("Seeded %d default pulse items", len(DEFAULT_PULSE))
+
+
+def fetch_market_pulse(artemis_api_key: str, db=None) -> list[PulseItem]:
+    """Fetch pulse assets from watchlist (label=pulse). Falls back to defaults."""
+    from .market_api import YFinanceClient
+
+    # Resolve pulse config: DB watchlist or hardcoded defaults
+    pulse_config: list[tuple[str, str, str, int]] = []
+    if db:
+        from .db_market import get_watchlist
+        rows = get_watchlist(db, enabled_only=True)
+        pulse_rows = [r for r in rows if r.get("label") == "pulse"]
+        if pulse_rows:
+            for r in pulse_rows:
+                meta = r.get("meta") or {}
+                if isinstance(meta, str):
+                    import json
+                    meta = json.loads(meta)
+                pulse_config.append((
+                    r["symbol"],
+                    r["asset_class"],
+                    meta.get("display", r["symbol"]),
+                    meta.get("row", 1),
+                ))
+    if not pulse_config:
+        pulse_config = [(s, a, d, r) for s, a, d, r in DEFAULT_PULSE]
+
+    # Sort by row then original order
+    pulse_config.sort(key=lambda x: x[3])
+
+    # Fetch quotes
+    artemis_client = None
+    if artemis_api_key:
+        try:
+            from .market_api import ArtemisClient
+            artemis_client = ArtemisClient(artemis_api_key)
+        except Exception as e:
+            logger.warning("Artemis client init failed: %s", e)
+
+    yf = YFinanceClient()
+    items: list[PulseItem] = []
+
+    for ticker, asset_class, display, _row in pulse_config:
+        try:
+            if asset_class == "crypto" and artemis_client:
+                artemis_sym = _CRYPTO_ARTEMIS_MAP.get(ticker.upper(), ticker.lower())
+                quote = artemis_client.get_crypto_quote(artemis_sym)
+            else:
+                quote = yf.get_quote(ticker)
+            if quote:
+                items.append(PulseItem(
+                    symbol=display, name=display,
+                    price=quote["price"], change_pct=quote["change_pct"],
+                    asset_class=asset_class,
+                ))
+        except Exception as e:
+            logger.warning("Pulse fetch failed for %s: %s", ticker, e)
+
+    return items
+
+
+# ── Feishu Card Builder (Schema 2.0, visually rich) ──
 
 
 def _fmt_price(price: float | None) -> str:
@@ -197,6 +277,15 @@ def _fmt_price(price: float | None) -> str:
     return f"${price:.2e}"
 
 
+def _fmt_pct_colored(pct: float | None) -> str:
+    """Format percentage with <font color> for Feishu markdown."""
+    if pct is None:
+        return "-"
+    sign = "+" if pct > 0 else ""
+    color = "green" if pct >= 0 else "red"
+    return f"<font color='{color}'>{sign}{pct:.2f}%</font>"
+
+
 def _fmt_pct(pct: float | None) -> str:
     if pct is None:
         return "-"
@@ -204,75 +293,145 @@ def _fmt_pct(pct: float | None) -> str:
     return f"{sign}{pct:.2f}%"
 
 
-def _ranking_markdown(result: RankingResult) -> str:
-    """Build a markdown table for one ranking section."""
-    if result.error:
-        return f"*{result.category}*: Data unavailable ({result.error})"
-    if not result.items:
-        return f"*{result.category}*: No data"
+def _pulse_column(item: PulseItem) -> dict:
+    """Build a single column for a pulse item (BTC, ETH, etc.)."""
+    indicator = "\U0001F7E2" if (item.change_pct or 0) >= 0 else "\U0001F534"
+    return {
+        "tag": "column",
+        "width": "weighted",
+        "weight": 1,
+        "elements": [{
+            "tag": "markdown",
+            "content": (
+                f"{indicator} **{item.symbol}**\n"
+                f"{_fmt_price(item.price)}\n"
+                f"{_fmt_pct_colored(item.change_pct)}"
+            ),
+        }],
+    }
 
-    lines = ["| # | Symbol | Price | Change |", "| --- | --- | --- | --- |"]
-    for item in result.items:
-        lines.append(
-            f"| {item.rank} | **{item.symbol}** | {_fmt_price(item.price)} | {_fmt_pct(item.change_pct)} |"
-        )
+
+def _ranking_items_md(result: RankingResult, limit: int = 5) -> str:
+    """Format ranking items as visually rich compact markdown."""
+    if result.error:
+        return f"\u26A0\uFE0F 数据暂不可用"
+    if not result.items:
+        return "暂无数据"
+
+    medals = {1: "\U0001F947", 2: "\U0001F948", 3: "\U0001F949"}
+    lines = []
+    for item in result.items[:limit]:
+        rank_str = medals.get(item.rank, f"**{item.rank}.**")
+        pct_str = _fmt_pct_colored(item.change_pct)
+        lines.append(f"{rank_str} **{item.symbol}**  {_fmt_price(item.price)}  {pct_str}")
     return "\n".join(lines)
 
 
-def _section_title(category: str) -> str:
-    titles = {
-        "nasdaq_gainers": "NASDAQ Top Gainers",
-        "nasdaq_losers": "NASDAQ Top Losers",
-        "crypto_gainers": "Crypto Top Gainers",
-        "crypto_losers": "Crypto Top Losers",
-    }
-    return titles.get(category, category)
+def _build_market_column(title: str, rankings: list[RankingResult]) -> list[dict]:
+    """Build elements for one column (NASDAQ or Crypto)."""
+    elements: list[dict] = [{"tag": "markdown", "content": f"**{title}**"}]
+
+    for r in rankings:
+        is_gainer = "gainers" in r.category
+        label = "\U0001F3C6 涨幅 TOP 5" if is_gainer else "\U0001F4A7 跌幅 TOP 5"
+        elements.append({"tag": "markdown", "content": f"\n{label}"})
+        elements.append({"tag": "markdown", "content": _ranking_items_md(r)})
+
+    return elements
 
 
-def _section_emoji(category: str) -> str:
-    emojis = {
-        "nasdaq_gainers": "\U0001F4C8",
-        "nasdaq_losers": "\U0001F4C9",
-        "crypto_gainers": "\U0001F680",
-        "crypto_losers": "\U0001F534",
-    }
-    return emojis.get(category, "")
+def _determine_header_template(rankings: list[RankingResult]) -> str:
+    """Pick header color based on overall market sentiment."""
+    total_pct = 0.0
+    count = 0
+    for r in rankings:
+        for item in r.items[:5]:
+            if item.change_pct is not None:
+                total_pct += item.change_pct
+                count += 1
+    avg = total_pct / count if count else 0
+    if avg > 1:
+        return "green"
+    if avg < -1:
+        return "red"
+    return "indigo"
 
 
-def build_ranking_card(rankings: list[RankingResult], date_str: str) -> dict:
-    """Build a Feishu interactive card with all ranking sections."""
+def build_ranking_card(
+    rankings: list[RankingResult],
+    date_str: str,
+    pulse: list[PulseItem] | None = None,
+) -> dict:
+    """Build a visually rich Feishu interactive card (Schema 2.0)."""
     elements: list[dict] = []
 
-    for result in rankings:
-        # Section header
-        elements.append({
-            "tag": "markdown",
-            "content": f"**{_section_emoji(result.category)} {_section_title(result.category)}**",
-        })
-        # Table
-        elements.append({
-            "tag": "markdown",
-            "content": _ranking_markdown(result),
-        })
-        # Divider between sections
+    # ── Market Pulse: key assets at a glance (2 rows of 4) ──
+    if pulse:
+        row1 = pulse[:4]
+        row2 = pulse[4:8]
+
+        if row1:
+            elements.append({
+                "tag": "column_set",
+                "flex_mode": "none",
+                "columns": [_pulse_column(p) for p in row1],
+            })
+        if row2:
+            elements.append({
+                "tag": "column_set",
+                "flex_mode": "none",
+                "columns": [_pulse_column(p) for p in row2],
+            })
         elements.append({"tag": "hr"})
 
-    # Remove last divider
-    if elements and elements[-1].get("tag") == "hr":
-        elements.pop()
+    # ── Rankings: two-column (NASDAQ | Crypto) ──
+    nasdaq = [r for r in rankings if "nasdaq" in r.category]
+    crypto = [r for r in rankings if "crypto" in r.category]
 
-    # Footer note
+    if nasdaq and crypto:
+        elements.append({
+            "tag": "column_set",
+            "flex_mode": "bisect",
+            "columns": [
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": _build_market_column("\U0001F4C8 美股 NASDAQ", nasdaq),
+                },
+                {
+                    "tag": "column",
+                    "width": "weighted",
+                    "weight": 1,
+                    "elements": _build_market_column("\U0001F4B0 加密货币", crypto),
+                },
+            ],
+        })
+    else:
+        for r in rankings:
+            elements.append({"tag": "markdown", "content": f"**{r.category}**"})
+            elements.append({"tag": "markdown", "content": _ranking_items_md(r, limit=10)})
+            elements.append({"tag": "hr"})
+        if elements and elements[-1].get("tag") == "hr":
+            elements.pop()
+
+    # ── Footer ──
+    elements.append({"tag": "hr"})
     elements.append({
-        "tag": "note",
-        "elements": [
-            {"tag": "plain_text", "content": f"Data as of {date_str} | Powered by Beiduoduo"},
-        ],
+        "tag": "markdown",
+        "content": f"\U0001F4E1 {date_str} \u00B7 NASDAQ Top 100 \u00B7 CoinGecko Top 100 \u00B7 Powered by **\u8D1D\u591A\u591A**",
     })
 
+    template = _determine_header_template(rankings)
+
     return {
+        "schema": "2.0",
         "header": {
-            "title": {"tag": "plain_text", "content": f"Daily Market Rankings - {date_str}"},
-            "template": "blue",
+            "title": {"tag": "plain_text", "content": f"\U0001F4CA \u6BCF\u65E5\u5E02\u573A\u8109\u640F \u00B7 {date_str}"},
+            "subtitle": {"tag": "plain_text", "content": "Daily Market Pulse \u00B7 \u8D1D\u591A\u591A"},
+            "template": template,
         },
-        "elements": elements,
+        "body": {
+            "elements": elements,
+        },
     }

@@ -248,7 +248,10 @@ def test_daily_push_dry_run():
                 card = json.loads(result.stdout)
             except json.JSONDecodeError as e:
                 pass
-        check("output is valid JSON card", card is not None and "header" in card and "elements" in card,
+        has_elements = card is not None and "header" in card and (
+            "elements" in card or ("body" in card and "elements" in card.get("body", {}))
+        )
+        check("output is valid JSON card", has_elements,
               f"stdout[:200]={result.stdout[:200]}")
     except subprocess.TimeoutExpired:
         check("daily_push --dry-run completes within 120s", False, "timeout")
@@ -273,6 +276,54 @@ def test_daily_push_send(full: bool = False):
               f"exit={result.returncode}, stderr={result.stderr[-200:]}")
     except Exception as e:
         check("daily_push runs", False, str(e))
+
+
+def test_kol_push_dry_run():
+    print("\n── KOL Push (dry-run) ──")
+    try:
+        result = subprocess.run(
+            ["python3", "kol_push.py", "--dry-run"],
+            cwd=API_DIR,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        check("kol_push --dry-run exits 0", result.returncode == 0,
+              f"exit={result.returncode}, stderr={result.stderr[-300:]}")
+        card = None
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                card = json.loads(result.stdout)
+            except json.JSONDecodeError:
+                pass
+        has_elements = card is not None and "header" in card and (
+            "body" in card and "elements" in card.get("body", {})
+        )
+        check("output is valid JSON card", has_elements,
+              f"stdout[:200]={result.stdout[:200]}")
+    except subprocess.TimeoutExpired:
+        check("kol_push --dry-run completes within 180s", False, "timeout")
+    except Exception as e:
+        check("kol_push --dry-run runs", False, str(e))
+
+
+def test_kol_push_send(full: bool = False):
+    print("\n── KOL Push (send) ──")
+    if not full:
+        skip("kol_push actual send (use --full)")
+        return
+    try:
+        result = subprocess.run(
+            ["python3", "kol_push.py"],
+            cwd=API_DIR,
+            capture_output=True,
+            text=True,
+            timeout=180,
+        )
+        check("kol_push exits 0", result.returncode == 0,
+              f"exit={result.returncode}, stderr={result.stderr[-300:]}")
+    except Exception as e:
+        check("kol_push runs", False, str(e))
 
 
 def test_logs_clean():
@@ -373,6 +424,8 @@ def main():
     test_chart_render_local()
     test_daily_push_dry_run()
     test_daily_push_send(full=args.full)
+    test_kol_push_dry_run()
+    test_kol_push_send(full=args.full)
     test_logs_clean()
 
     elapsed = time.time() - t_start
