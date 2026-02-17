@@ -1,5 +1,36 @@
 # PROGRESS — 贝多多项目进度
 
+## 2026-02-17 OpenClaw 深度集成优化
+
+### 完成了什么
+- **Phase 1 TOOLS.md**：从平铺列表重写为意图决策树，按 7 个分类（研报/行情/宏观/外汇/期权/链上/互联网/飞书）给出首选→备选路由表 + 禁止行为清单
+- **Phase 2 Plugin Hooks**：3 个 hook + 1 个 HTTP 路由
+  - `after_tool_call`：统计每个 tool 的调用次数、错误次数、总耗时
+  - `before_tool_call`：参数自动修正（symbol/token→大写，pair→去斜杠大写，protocol/chain→小写）
+  - `tool_result_persist`（同步）：market_get_history/forex_history/options_chain 大数组截断为首尾各 3 条 + 摘要，省 context
+  - `/api/tool-stats` HTTP 路由：`curl http://127.0.0.1:18789/api/tool-stats`
+- **Phase 3 HEARTBEAT.md**：每小时检查 report_sync_status + macro_overview 可达性，异常才 DM 赵总
+- **Phase 4 USER.md + SYSTEM_PROMPT.md**：补全持仓/偏好结构，简化记忆协议（4 行替代原来 12 行手动触发规则，配合 OpenClaw 内置 memoryFlush）
+- Gateway 重启 + Session 重置 + /api/tool-stats 验证通过
+
+### 改动文件
+- `~/.openclaw/workspace/TOOLS.md` — 全部重写
+- `report-db-plugin/index.js` — 3 hooks + HTTP route（已 cp 到 installPath）
+- `~/.openclaw/workspace/HEARTBEAT.md` — 健康检查任务
+- `~/.openclaw/workspace/USER.md` — 持仓/偏好结构
+- `~/.openclaw/workspace/SYSTEM_PROMPT.md` — 简化第 6 节
+
+### 踩坑记录
+- ✅ `tool_result_persist` 必须是同步的（不能 async），OpenClaw 会忽略 Promise 返回值
+- ✅ `before_tool_call` 返回 `{ params }` 可修改参数，返回 `{ block: true }` 可拦截
+- ✅ 没有新增 tool，不需要改 openclaw.json allow 列表
+- ✅ 没有改 FastAPI 代码，不需要重启 API
+
+### 下次注意事项
+- tool-stats 是内存级统计，gateway 重启会清零
+- 如果 /api/tool-stats 返回空 stats，说明 gateway 刚重启过
+- 心跳效果需要等 1 小时后观察，或手动触发心跳验证
+
 ## 2026-02-17 全面优化 — 可靠性 + 性能 + Bot 体验 + 数据库
 
 ### 完成了什么

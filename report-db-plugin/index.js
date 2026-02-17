@@ -167,12 +167,121 @@ const MetricsSchema = Type.Object({
   limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
 });
 
+// ── Tool call statistics (in-memory, resets on gateway restart) ──
+const toolStats = {};
+
+function getToolStat(name) {
+  if (!toolStats[name]) {
+    toolStats[name] = { calls: 0, errors: 0, totalMs: 0 };
+  }
+  return toolStats[name];
+}
+
+// ── Parameter auto-correction rules ──
+const SYMBOL_PARAMS = new Set(["symbol", "token"]);
+const PAIR_PARAMS = new Set(["pair"]);
+const LOWERCASE_PARAMS = new Set(["protocol", "chain"]);
+
+function correctParams(toolName, params) {
+  const corrected = { ...params };
+  let changed = false;
+  for (const [key, val] of Object.entries(corrected)) {
+    if (typeof val !== "string") continue;
+    if (SYMBOL_PARAMS.has(key)) {
+      const upper = val.toUpperCase();
+      if (upper !== val) { corrected[key] = upper; changed = true; }
+    } else if (PAIR_PARAMS.has(key)) {
+      const fixed = val.replace(/[\s/\-]/g, "").toUpperCase();
+      if (fixed !== val) { corrected[key] = fixed; changed = true; }
+    } else if (LOWERCASE_PARAMS.has(key)) {
+      const lower = val.toLowerCase();
+      if (lower !== val) { corrected[key] = lower; changed = true; }
+    }
+  }
+  return changed ? corrected : null;
+}
+
+// ── Large result truncation for context saving ──
+const TRUNCATE_TOOLS = new Set([
+  "market_get_history", "forex_history", "options_chain",
+]);
+const KEEP_ITEMS = 3;
+
+function truncateArrayInObj(obj) {
+  if (Array.isArray(obj) && obj.length > KEEP_ITEMS * 2) {
+    const total = obj.length;
+    return [
+      ...obj.slice(0, KEEP_ITEMS),
+      { _truncated: true, _summary: `... ${total - KEEP_ITEMS * 2} items omitted (${total} total) ...` },
+      ...obj.slice(-KEEP_ITEMS),
+    ];
+  }
+  if (obj && typeof obj === "object" && !Array.isArray(obj)) {
+    let changed = false;
+    const result = {};
+    for (const [k, v] of Object.entries(obj)) {
+      const tv = truncateArrayInObj(v);
+      if (tv !== v) changed = true;
+      result[k] = tv;
+    }
+    return changed ? result : obj;
+  }
+  return obj;
+}
+
 const plugin = {
   id: "openclaw-report-db",
   name: "Report DB",
   description: "Beiduoduo local report query tools",
   configSchema: emptyPluginConfigSchema(),
   register(api) {
+    // ── Hook: after_tool_call — statistics ──
+    api.on("after_tool_call", (event) => {
+      const stat = getToolStat(event.toolName);
+      stat.calls++;
+      if (event.error) stat.errors++;
+      if (event.durationMs) stat.totalMs += event.durationMs;
+    });
+
+    // ── Hook: before_tool_call — param auto-correction ──
+    api.on("before_tool_call", (event) => {
+      const corrected = correctParams(event.toolName, event.params);
+      if (corrected) {
+        return { params: corrected };
+      }
+    });
+
+    // ── Hook: tool_result_persist — truncate large results (SYNC) ──
+    api.on("tool_result_persist", (event) => {
+      if (!event.toolName || !TRUNCATE_TOOLS.has(event.toolName)) return;
+      const msg = event.message;
+      if (!msg || !msg.content) return;
+      let modified = false;
+      const newContent = msg.content.map((block) => {
+        if (block.type !== "text" || !block.text) return block;
+        try {
+          const parsed = JSON.parse(block.text);
+          const truncated = truncateArrayInObj(parsed);
+          if (truncated !== parsed) {
+            modified = true;
+            return { ...block, text: JSON.stringify(truncated, null, 2) };
+          }
+        } catch { /* not JSON, leave as-is */ }
+        return block;
+      });
+      if (modified) {
+        return { message: { ...msg, content: newContent } };
+      }
+    });
+
+    // ── HTTP Route: /api/tool-stats ──
+    api.registerHttpRoute({
+      path: "/api/tool-stats",
+      handler(_req, res) {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ stats: toolStats, timestamp: new Date().toISOString() }, null, 2));
+      },
+    });
     api.registerTool(
       {
         name: "report_search",
