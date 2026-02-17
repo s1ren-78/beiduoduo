@@ -1,5 +1,84 @@
 # PROGRESS — 贝多多项目进度
 
+## 2026-02-17 全面优化 — 可靠性 + 性能 + Bot 体验 + 数据库
+
+### 完成了什么
+- **Phase 1 可靠性**：消灭所有 `except: pass`，全部改为 `_log.warning`；feishu_api token buffer 120s→300s、JSON decode guard、pagination 日志；kol_briefing Claude 重试+[摘要]前缀区分 fallback
+- **Phase 2 性能**：FRED 缓存（macro_indicator 1h TTL、macro_overview 6h TTL）；yf.Ticker LRU 缓存（maxsize=64）避免重复 HTTP session
+- **Phase 3 Bot 体验**：4 个搜索 tool 加 USE WHEN / NOT FOR 指引，减少 bot 选错工具
+- **Phase 4 数据库**：新增 3 个索引（report_type、direction+time、extracted_at）；FTS rank 取反变正数（越大越好）
+- **Phase 5 输入校验**：chart_render 日期解析失败显式 raise ValueError；/v1/search from >= to 返回 400
+- **Phase 6 测试**：新增 3 个冒烟测试（invalid date range、positive score、macro cache）
+- 冒烟测试全绿：55 pass / 0 fail / 4 skip
+- Plugin 同步到 installPath + gateway 重启 + session 重置
+
+### 踩坑记录
+- ❌ test_macro_cached 第一次失败：因为 test_macro_overview 已经暖了缓存，两次调用都是 0s
+  ✅ 测试改为：如果首次 < 1s（已缓存），只检查第二次也 < 1s
+
+### 改动文件
+- `feishu_mirror/query_api.py` — cache_write 日志、from/to 校验
+- `feishu_mirror/lib/feishu_api.py` — token buffer、JSON guard、pagination 日志
+- `feishu_mirror/lib/openbb_api.py` — TTL 缓存、LRU Ticker、insider 日志
+- `feishu_mirror/lib/chart_render.py` — cleanup 日志、日期解析校验
+- `feishu_mirror/lib/kol_briefing.py` — 搜索降级日志、Claude 重试
+- `feishu_mirror/lib/db.py` — FTS rank 取反
+- `feishu_mirror/schema.sql` — 3 个新索引
+- `report-db-plugin/index.js` — tool 描述优化
+- `feishu_mirror/tests/smoke_test.py` — 3 个新测试
+
+## 2026-02-17 OpenBB 数据平台集成 — 宏观/基本面/外汇/期权
+
+### 完成了什么
+- 新增 `lib/openbb_api.py` — 统一封装 FRED（宏观）、yfinance（股票基本面/外汇/期权）、FMP（内部人交易）
+- 新增 10 个 API 端点：/v1/macro/*, /v1/equity/*, /v1/forex/*, /v1/options/*
+- 新增 10 个 Bot Tool：macro_indicator, macro_overview, equity_profile, equity_ratios, equity_analysts, equity_insiders, equity_institutions, forex_quote, forex_history, options_chain
+- 新增 4 个冒烟测试：test_equity_profile, test_forex_quote, test_options_chain, test_macro_overview
+- 冒烟测试全绿（47 pass / 0 fail / 5 skip），Gateway 已重启
+- 新增 `fred_api_key` 和 `fmp_api_key` 到 Settings + .env
+
+### 踩坑记录
+
+#### 坑 1: pip install 破坏已有依赖版本
+- ❌ `pip3 install openbb[yfinance]` 把 yfinance 从 1.1.0 降到 0.2.66，破坏了已有的 `market_api.py`
+- ✅ **铁律：安装新包前，先记录关键依赖版本（`pip3 freeze | grep yfinance`），装完立刻验证版本没变，变了就手动恢复**
+- ✅ 以后涉及 pip install 大包，先跑 `pip3 install --dry-run` 看它要改什么
+
+#### 坑 2: 只改了源码没同步到 plugin 安装目录
+- ❌ 改了 `/Users/beiduoudo/beiduoduo/report-db-plugin/index.js`，但 gateway 读的是 `~/.openclaw/extensions/openclaw-report-db/index.js`（安装路径），两份文件不同步
+- ❌ 以为 `openclaw gateway restart` 就够了，实际上 gateway 不会从 sourcePath 重新拷贝
+- ✅ **铁律：改完 plugin 后，必须手动 `cp` 到 installPath，或者用 `openclaw plugin install --force` 重装**
+- ✅ 验证方法：`diff sourcePath/index.js installPath/index.js` 确认一致
+
+#### 坑 3: openclaw.json 的 tools.allow 白名单要完整
+- ❌ 新注册了 10 个 tool，但没加到 `agents.list[0].tools.allow`，导致 bot 看不到这些 tool
+- ❌ gateway 报 `allowlist contains unknown entries ... Ignoring allowlist`，整个白名单被丢弃
+- ❌ 尝试用 `alsoAllow` 修复，但 openclaw 不允许 `allow` 和 `alsoAllow` 同时存在
+- ✅ **铁律：新增 bot tool = 改 index.js + cp 到 installPath + 改 openclaw.json allow 列表，三步缺一不可**
+
+#### 坑 4: bot session 缓存了旧的 tool 列表
+- ❌ gateway 重启后 bot 仍然不用新 tool，因为旧 session（79% context）里的 system prompt 没有新 tool
+- ✅ 重置 session：`echo '{}' > ~/.openclaw/agents/main/sessions/sessions.json` + 重启 gateway
+- ✅ **铁律：新增 tool 后必须重置 session，否则 bot 不知道有新工具可用**
+
+#### 坑 5: .env 改了但没重启 API
+- ❌ 加了 FRED_API_KEY 到 .env，但 API 进程还是旧的环境变量，/v1/macro/overview 报 "key not set"
+- ✅ **铁律：改了 .env 就要重启 API 进程（`lsof -ti:8788 | xargs kill -9` + 重启）**
+
+### 下次注意事项（新增 tool 完整 checklist）
+1. `pip3 freeze | grep 关键包` — 记录版本
+2. `pip3 install xxx` — 装完检查版本没变
+3. 改 `report-db-plugin/index.js` — 新增 Schema + tool 注册
+4. `cp index.js ~/.openclaw/extensions/openclaw-report-db/index.js` — 同步到安装路径
+5. `diff` 确认两份文件一致
+6. 改 `~/.openclaw/openclaw.json` — `agents.list[0].tools.allow` 加入新 tool 名
+7. 改 `.env` — 新增 API key
+8. 重启 API（`lsof -ti:8788 | xargs kill -9` + 启动）
+9. 跑冒烟测试确认 API 端点正常
+10. `openclaw gateway restart` — 重启 gateway
+11. 重置 session — `echo '{}' > sessions.json` + 再次重启 gateway
+12. 让用户在飞书上实际测一次，确认 bot 调了正确的 tool
+
 ## 2026-02-17 研报结构化 — 全量提取 + Bot Tool 注册
 
 ### 完成了什么

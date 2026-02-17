@@ -316,7 +316,7 @@ class DB:
               d.source_type,
               d.category,
               c.chunk_id,
-              fts.rank AS score,
+              -fts.rank AS score,
               c.content AS quote,
               c.start_offset,
               c.end_offset,
@@ -328,7 +328,7 @@ class DB:
             LEFT JOIN report_source_file sf ON sf.id = d.source_file_id
             WHERE report_chunk_fts MATCH ?
             {where_clause}
-            ORDER BY fts.rank
+            ORDER BY fts.rank ASC
             LIMIT ?
         """
         all_params = [query, *params, top_k]

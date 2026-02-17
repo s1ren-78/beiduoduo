@@ -115,6 +115,34 @@ const BitableCreateSchema = Type.Object({
   folder_token: Type.Optional(Type.String()),
 });
 
+const MacroIndicatorSchema = Type.Object({
+  series_id: Type.String({ minLength: 1 }),
+  days: Type.Optional(Type.Number({ minimum: 1, maximum: 7300 })),
+});
+
+const SymbolSchema = Type.Object({
+  symbol: Type.String({ minLength: 1 }),
+});
+
+const SymbolLimitSchema = Type.Object({
+  symbol: Type.String({ minLength: 1 }),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+});
+
+const ForexPairSchema = Type.Object({
+  pair: Type.String({ minLength: 3 }),
+});
+
+const ForexHistorySchema = Type.Object({
+  pair: Type.String({ minLength: 3 }),
+  days: Type.Optional(Type.Number({ minimum: 1, maximum: 3650 })),
+});
+
+const OptionsChainSchema = Type.Object({
+  symbol: Type.String({ minLength: 1 }),
+  expiry: Type.Optional(Type.String()),
+});
+
 const EmptySchema = Type.Object({});
 
 const StructuredReportsSchema = Type.Object({
@@ -149,7 +177,7 @@ const plugin = {
       {
         name: "report_search",
         label: "Report Search",
-        description: "Search indexed research documents in local+feishu mirror.",
+        description: "Search indexed research documents in local+feishu mirror. USE WHEN: free-text search for report paragraphs/content. NOT FOR: browsing reports by company/sector (use report_structured_list).",
         parameters: SearchSchema,
         async execute(_toolCallId, params) {
           const p = params;
@@ -349,6 +377,160 @@ const plugin = {
       { name: "onchain_liquidity" },
     );
 
+    // ── Macro & Enhanced Data (OpenBB) ──
+
+    api.registerTool(
+      {
+        name: "macro_indicator",
+        label: "Macro Indicator",
+        description: "Query a US macro economic indicator from FRED. series_id can be: GDP, CPI, FEDFUNDS (联邦基金利率), UNRATE (失业率), DGS10 (10年国债), M2SL (M2货币供应), or any raw FRED series ID.",
+        parameters: MacroIndicatorSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("series_id", params.series_id);
+          if (params.days) query.set("days", String(params.days));
+          return json(await request(api, `/v1/macro/indicator?${query.toString()}`));
+        },
+      },
+      { name: "macro_indicator" },
+    );
+
+    api.registerTool(
+      {
+        name: "macro_overview",
+        label: "Macro Overview",
+        description: "Get a snapshot of key US macro indicators: GDP, CPI, Fed Funds Rate, Unemployment, 10Y Treasury, M2. One call gives the full picture.",
+        parameters: EmptySchema,
+        async execute() {
+          return json(await request(api, "/v1/macro/overview"));
+        },
+      },
+      { name: "macro_overview" },
+    );
+
+    api.registerTool(
+      {
+        name: "equity_profile",
+        label: "Equity Profile",
+        description: "Company overview: sector, industry, market cap, P/E, P/B, dividend yield, 52-week range, beta. Use for '苹果是什么行业' or 'AAPL market cap'.",
+        parameters: SymbolSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          return json(await request(api, `/v1/equity/profile?${query.toString()}`));
+        },
+      },
+      { name: "equity_profile" },
+    );
+
+    api.registerTool(
+      {
+        name: "equity_ratios",
+        label: "Equity Ratios",
+        description: "Financial valuation ratios: P/E, P/B, P/S, EV/EBITDA, ROE, ROA, profit margin, debt-to-equity. Use for '特斯拉PE多少' or 'compare AAPL vs MSFT valuations'.",
+        parameters: SymbolSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          return json(await request(api, `/v1/equity/ratios?${query.toString()}`));
+        },
+      },
+      { name: "equity_ratios" },
+    );
+
+    api.registerTool(
+      {
+        name: "equity_analysts",
+        label: "Analyst Estimates",
+        description: "Analyst consensus: target price (high/low/mean), recommendation (buy/hold/sell), EPS & revenue estimates. Use for '分析师怎么看AAPL' or 'NVDA target price'.",
+        parameters: SymbolSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          return json(await request(api, `/v1/equity/analysts?${query.toString()}`));
+        },
+      },
+      { name: "equity_analysts" },
+    );
+
+    api.registerTool(
+      {
+        name: "equity_insiders",
+        label: "Insider Trading",
+        description: "Recent insider (executive/director) buy/sell activity. Use for '特斯拉最近有内部人买入吗' or 'AAPL insider transactions'.",
+        parameters: SymbolLimitSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          if (params.limit) query.set("limit", String(params.limit));
+          return json(await request(api, `/v1/equity/insiders?${query.toString()}`));
+        },
+      },
+      { name: "equity_insiders" },
+    );
+
+    api.registerTool(
+      {
+        name: "equity_institutions",
+        label: "Institutional Holders",
+        description: "Top institutional shareholders (Vanguard, BlackRock, etc.) and their holdings. Use for '谁是AAPL最大股东' or 'institutional ownership of TSLA'.",
+        parameters: SymbolSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          return json(await request(api, `/v1/equity/institutions?${query.toString()}`));
+        },
+      },
+      { name: "equity_institutions" },
+    );
+
+    api.registerTool(
+      {
+        name: "forex_quote",
+        label: "Forex Quote",
+        description: "Real-time foreign exchange rate. pair format: USDCNY, EURUSD, USDJPY, GBPUSD. Use for '今天人民币汇率' or 'EUR to USD rate'.",
+        parameters: ForexPairSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("pair", params.pair);
+          return json(await request(api, `/v1/forex/quote?${query.toString()}`));
+        },
+      },
+      { name: "forex_quote" },
+    );
+
+    api.registerTool(
+      {
+        name: "forex_history",
+        label: "Forex History",
+        description: "Historical forex rates (OHLC). Use for '人民币过去一年走势' or 'EURUSD trend last 90 days'.",
+        parameters: ForexHistorySchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("pair", params.pair);
+          if (params.days) query.set("days", String(params.days));
+          return json(await request(api, `/v1/forex/history?${query.toString()}`));
+        },
+      },
+      { name: "forex_history" },
+    );
+
+    api.registerTool(
+      {
+        name: "options_chain",
+        label: "Options Chain",
+        description: "Options chain data: strikes, calls, puts, IV, Greeks, open interest, volume. Use for 'AAPL下周五到期的期权' or 'TSLA options IV'.",
+        parameters: OptionsChainSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          query.set("symbol", params.symbol);
+          if (params.expiry) query.set("expiry", params.expiry);
+          return json(await request(api, `/v1/options/chain?${query.toString()}`));
+        },
+      },
+      { name: "options_chain" },
+    );
+
     // ── Bitable ──
 
     api.registerTool(
@@ -381,7 +563,7 @@ const plugin = {
       {
         name: "report_structured_list",
         label: "Structured Reports",
-        description: "Search structured research reports by company, sector, or report type. Returns enriched metadata including summaries, quality scores, and classifications.",
+        description: "Search structured research reports by company, sector, or report type. Returns enriched metadata including summaries, quality scores, and classifications. USE WHEN: browsing/filtering reports by company, sector, or type. NOT FOR: searching text content (use report_search).",
         parameters: StructuredReportsSchema,
         async execute(_toolCallId, params) {
           const query = new URLSearchParams();
@@ -412,7 +594,7 @@ const plugin = {
       {
         name: "report_theses",
         label: "Investment Theses",
-        description: "Search investment theses across all reports. Filter by company or direction (bullish/bearish/neutral). Use for questions like '哪些研报看多ETH' or 'bearish views on Coinbase'.",
+        description: "Search investment theses across all reports. Filter by company or direction (bullish/bearish/neutral). USE WHEN: asking about bullish/bearish views, investment opinions, catalysts, risks. NOT FOR: looking up financial numbers (use report_metrics). Examples: '哪些研报看多ETH', 'bearish views on Coinbase'.",
         parameters: ThesesSchema,
         async execute(_toolCallId, params) {
           const query = new URLSearchParams();
@@ -429,7 +611,7 @@ const plugin = {
       {
         name: "report_metrics",
         label: "Financial Metrics",
-        description: "Search financial metrics across all reports. Filter by company, ticker, or metric name. Use for questions like 'Coinbase收入' or 'ETH TVL data'.",
+        description: "Search financial metrics extracted from reports. Filter by company, ticker, or metric name. USE WHEN: looking up specific financial numbers (revenue, TVL, users, etc.) from research reports. NOT FOR: investment opinions (use report_theses). Examples: 'Coinbase收入', 'ETH TVL data'.",
         parameters: MetricsSchema,
         async execute(_toolCallId, params) {
           const query = new URLSearchParams();

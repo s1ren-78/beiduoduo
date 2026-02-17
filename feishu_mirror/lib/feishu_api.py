@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from typing import Any
 
 import requests
+
+_log = logging.getLogger(__name__)
 
 
 BASE_URL = "https://open.feishu.cn"
@@ -38,7 +41,7 @@ class FeishuClient:
 
     def _get_token(self) -> str:
         now = time.time()
-        if self._tenant_token and now < self._tenant_token_expiry - 120:
+        if self._tenant_token and now < self._tenant_token_expiry - 300:
             return self._tenant_token
 
         resp = requests.post(
@@ -67,7 +70,10 @@ class FeishuClient:
                 continue
 
             resp.raise_for_status()
-            payload = resp.json()
+            try:
+                payload = resp.json()
+            except (ValueError, requests.exceptions.JSONDecodeError):
+                raise FeishuApiError(f"{path}: response is not JSON (status={resp.status_code}, body={resp.text[:200]})")
             if payload.get("code") != 0:
                 raise FeishuApiError(f"{path}: {payload.get('msg')} ({payload.get('code')})")
             return payload.get("data", {})
@@ -175,7 +181,8 @@ class FeishuClient:
                 params["page_token"] = page_token
             try:
                 data = self.request("GET", "/open-apis/contact/v3/scopes", params=params)
-            except Exception:
+            except Exception as exc:
+                _log.warning("list_app_visible_users pagination failed: %s", exc)
                 break
             for uid in data.get("user_ids", []):
                 if uid not in open_ids:

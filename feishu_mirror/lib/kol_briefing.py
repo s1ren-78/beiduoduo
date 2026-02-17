@@ -76,6 +76,7 @@ def _search_with_retry(searcher, query: str, count: int) -> dict:
     import time
     result = searcher.search(query, count=count, freshness="pd")
     if not result.get("results") and not result.get("error"):
+        logger.info("search 24h empty for %r, falling back to 7d", query)
         result = searcher.search(query, count=count, freshness="pw")
     if result.get("error"):
         time.sleep(2)
@@ -228,11 +229,36 @@ def summarize_kol_opinions(
         summary.points = points[:settings.get("summary_max_points", 3)] if points else ["暂无新动态"]
 
     except Exception as e:
-        logger.error("Claude summarization failed for %s: %s", kol.name, e)
+        logger.warning("Claude summarization failed for %s: %s — retrying once", kol.name, e)
+        # One retry
+        try:
+            import anthropic
+            client = anthropic.Anthropic()
+            resp = client.messages.create(
+                model=model,
+                max_tokens=512,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            text = resp.content[0].text.strip()
+            points = []
+            for line in text.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                for prefix in ("• ", "· ", "- ", "* ", "•", "·"):
+                    if line.startswith(prefix):
+                        line = line[len(prefix):].strip()
+                        if line and "暂无" not in line:
+                            points.append(line)
+                        break
+            summary.points = points[:settings.get("summary_max_points", 3)] if points else ["暂无新动态"]
+            return summary
+        except Exception as e2:
+            logger.error("Claude retry also failed for %s: %s", kol.name, e2)
         summary.error = str(e)
-        # Fallback: use raw snippets
+        # Fallback: use raw snippets with prefix to distinguish
         summary.points = [
-            a.snippet[:80] for a in articles[:2] if a.snippet
+            f"[摘要] {a.snippet[:80]}" for a in articles[:2] if a.snippet
         ] or ["暂无新动态"]
 
     return summary

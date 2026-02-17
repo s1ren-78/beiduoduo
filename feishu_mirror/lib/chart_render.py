@@ -47,12 +47,16 @@ def _parse_dates(series: list[dict]) -> tuple[list[datetime], list[float]]:
         d = item.get("date") or item.get("trade_date") or item.get("period", "")
         v = item.get("value") or item.get("close") or item.get("price", 0)
         if isinstance(d, str):
+            parsed = None
             for fmt in ("%Y-%m-%d", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M:%S"):
                 try:
-                    d = datetime.strptime(d, fmt)
+                    parsed = datetime.strptime(d, fmt)
                     break
                 except ValueError:
                     continue
+            if parsed is None:
+                raise ValueError(f"Cannot parse date: {d!r}")
+            d = parsed
         dates.append(d)
         values.append(float(v))
     return dates, values
@@ -211,13 +215,13 @@ def _cleanup_playwright():
     try:
         if _browser_instance:
             _browser_instance.close()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("cleanup: browser close failed: %s", exc)
     try:
         if _playwright_instance:
             _playwright_instance.stop()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("cleanup: playwright stop failed: %s", exc)
     _browser_instance = None
     _playwright_instance = None
 

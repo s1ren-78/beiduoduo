@@ -50,6 +50,18 @@ from lib.feishu_api import FeishuAuth, FeishuClient
 from lib.feishu_bitable import FeishuBitableClient
 from lib.market_api import ArtemisClient, YFinanceClient
 from lib.sec_api import SECEdgarClient
+from lib.openbb_api import (
+    get_macro_indicator,
+    get_macro_overview,
+    get_equity_profile,
+    get_equity_ratios,
+    get_analyst_estimates,
+    get_insider_trading,
+    get_institutional_holders,
+    get_forex_quote,
+    get_forex_history,
+    get_options_chain,
+)
 
 
 class SyncRunRequest(BaseModel):
@@ -125,8 +137,8 @@ def _cache_write(fn) -> None:
     """Non-fatal write-through cache call. fn is a zero-arg callable."""
     try:
         fn()
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("cache write failed: %s", exc)
 
 
 def _send_feishu_image(png: bytes, rid: str, rid_type: str, result: dict[str, Any]) -> None:
@@ -159,6 +171,8 @@ def search(
     from_ts: Optional[datetime] = Query(default=None, alias="from"),
     to_ts: Optional[datetime] = Query(default=None, alias="to"),
 ):
+    if from_ts and to_ts and from_ts >= to_ts:
+        raise HTTPException(status_code=400, detail="'from' must be before 'to'")
     rows = db.search(
         query=q,
         top_k=top_k,
@@ -556,6 +570,103 @@ def metrics(
 def reports_stats():
     """Structurization progress stats."""
     return structurize_stats(db)
+
+
+# ── OpenBB Data Endpoints (macro, equity enhanced, forex, options) ──
+
+
+@app.get("/v1/macro/indicator")
+def macro_indicator(
+    series_id: str = Query(..., min_length=1),
+    days: int = Query(365, ge=1, le=7300),
+):
+    """Single FRED macro indicator (GDP, CPI, FEDFUNDS, UNRATE, DGS10, M2SL)."""
+    try:
+        rows = get_macro_indicator(series_id, days=days)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"no data for series {series_id}")
+    return {"series_id": series_id, "days": days, "data": rows}
+
+
+@app.get("/v1/macro/overview")
+def macro_overview():
+    """Key US macro indicators at a glance (GDP, CPI, Fed rate, unemployment, 10Y, M2)."""
+    try:
+        data = get_macro_overview()
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return data
+
+
+@app.get("/v1/equity/profile")
+def equity_profile(symbol: str = Query(..., min_length=1)):
+    """Company overview: sector, market cap, P/E, dividend yield, 52-week range."""
+    data = get_equity_profile(symbol)
+    if not data.get("price"):
+        raise HTTPException(status_code=404, detail=f"profile not found for {symbol}")
+    return data
+
+
+@app.get("/v1/equity/ratios")
+def equity_ratios(symbol: str = Query(..., min_length=1)):
+    """Valuation ratios: P/E, P/B, P/S, EV/EBITDA, ROE, ROA."""
+    return get_equity_ratios(symbol)
+
+
+@app.get("/v1/equity/analysts")
+def equity_analysts(symbol: str = Query(..., min_length=1)):
+    """Analyst consensus: target price, rating, EPS estimates."""
+    return get_analyst_estimates(symbol)
+
+
+@app.get("/v1/equity/insiders")
+def equity_insiders(
+    symbol: str = Query(..., min_length=1),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Insider trading activity (FMP or yfinance fallback)."""
+    return {"symbol": symbol.upper(), "data": get_insider_trading(symbol, limit=limit)}
+
+
+@app.get("/v1/equity/institutions")
+def equity_institutions(symbol: str = Query(..., min_length=1)):
+    """Top institutional holders."""
+    return {"symbol": symbol.upper(), "data": get_institutional_holders(symbol)}
+
+
+@app.get("/v1/forex/quote")
+def forex_quote(pair: str = Query(..., min_length=3)):
+    """Real-time forex rate (USDCNY, EURUSD, USDJPY, etc.)."""
+    data = get_forex_quote(pair)
+    if not data.get("price"):
+        raise HTTPException(status_code=404, detail=f"forex quote not found for {pair}")
+    return data
+
+
+@app.get("/v1/forex/history")
+def forex_history(
+    pair: str = Query(..., min_length=3),
+    days: int = Query(365, ge=1, le=3650),
+):
+    """Historical forex rates."""
+    rows = get_forex_history(pair, days=days)
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"forex history not found for {pair}")
+    return {"pair": pair.upper(), "days": days, "data": rows}
+
+
+@app.get("/v1/options/chain")
+def options_chain(
+    symbol: str = Query(..., min_length=1),
+    expiry: Optional[str] = Query(None),
+):
+    """Options chain: strikes, calls, puts, IV, Greeks, OI."""
+    data = get_options_chain(symbol, expiry=expiry)
+    if not data.get("expirations"):
+        raise HTTPException(status_code=404, detail=f"no options found for {symbol}")
+    return data
 
 
 if __name__ == "__main__":

@@ -29,6 +29,8 @@ class Settings:
     financials_incremental_minutes: int
     market_history_days: int
     brave_search_api_key: str
+    fred_api_key: str
+    fmp_api_key: str
 
 
 def load_settings(env_file: str | None = None) -> Settings:
@@ -71,6 +73,8 @@ def load_settings(env_file: str | None = None) -> Settings:
         financials_incremental_minutes=int(os.getenv("FINANCIALS_INCREMENTAL_MINUTES", "720")),
         market_history_days=int(os.getenv("MARKET_HISTORY_DAYS", "365")),
         brave_search_api_key=os.getenv("BRAVE_SEARCH_API_KEY", ""),
+        fred_api_key=os.getenv("FRED_API_KEY", ""),
+        fmp_api_key=os.getenv("FMP_API_KEY", ""),
     )
 
 

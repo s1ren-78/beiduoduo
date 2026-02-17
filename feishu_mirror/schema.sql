@@ -261,7 +261,10 @@ CREATE TABLE IF NOT EXISTS report_metric (
 );
 
 CREATE INDEX IF NOT EXISTS idx_report_meta_enriched_doc ON report_meta_enriched(doc_id);
+CREATE INDEX IF NOT EXISTS idx_report_meta_enriched_type ON report_meta_enriched(report_type, extracted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_report_thesis_doc ON report_thesis(doc_id);
 CREATE INDEX IF NOT EXISTS idx_report_thesis_company ON report_thesis(company, direction);
+CREATE INDEX IF NOT EXISTS idx_report_thesis_direction_time ON report_thesis(direction, extracted_at DESC);
 CREATE INDEX IF NOT EXISTS idx_report_metric_doc ON report_metric(doc_id);
 CREATE INDEX IF NOT EXISTS idx_report_metric_company ON report_metric(company, metric);
+CREATE INDEX IF NOT EXISTS idx_report_metric_extracted ON report_metric(extracted_at DESC);

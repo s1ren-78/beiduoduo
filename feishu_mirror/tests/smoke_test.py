@@ -376,6 +376,86 @@ def test_structured_api():
     check("GET /v1/reports/{bad_id}/structured returns 404", code == 404, f"got {code}")
 
 
+def test_equity_profile():
+    print("\n── Equity Profile (OpenBB) ──")
+    code, body = _req("GET", "/v1/equity/profile?symbol=AAPL")
+    check("GET /v1/equity/profile returns 200", code == 200, f"got {code}")
+    check("has price", body.get("price") is not None, f"keys={list(body.keys())}")
+    check("has sector", body.get("sector") != "", f"sector={body.get('sector')}")
+    check("has pe_trailing", body.get("pe_trailing") is not None)
+
+
+def test_forex_quote():
+    print("\n── Forex Quote (OpenBB) ──")
+    code, body = _req("GET", "/v1/forex/quote?pair=USDCNY")
+    check("GET /v1/forex/quote returns 200", code == 200, f"got {code}")
+    check("has price", body.get("price") is not None, f"keys={list(body.keys())}")
+    check("price in reasonable range", 5 < (body.get("price") or 0) < 10,
+          f"price={body.get('price')}")
+
+
+def test_options_chain():
+    print("\n── Options Chain (OpenBB) ──")
+    code, body = _req("GET", "/v1/options/chain?symbol=AAPL")
+    check("GET /v1/options/chain returns 200", code == 200, f"got {code}")
+    check("has expirations", isinstance(body.get("expirations"), list) and len(body["expirations"]) > 0)
+    check("has calls", isinstance(body.get("calls"), list) and len(body["calls"]) > 0)
+    check("has puts", isinstance(body.get("puts"), list) and len(body["puts"]) > 0)
+
+
+def test_macro_overview():
+    print("\n── Macro Overview (OpenBB) ──")
+    code, body = _req("GET", "/v1/macro/overview")
+    if code == 400 and "FRED_API_KEY" in str(body):
+        skip("macro_overview", "FRED_API_KEY not set")
+    else:
+        check("GET /v1/macro/overview returns 200", code == 200, f"got {code}")
+        check("has Fed_Funds_Rate", "Fed_Funds_Rate" in body, f"keys={list(body.keys())}")
+
+
+def test_search_invalid_date_range():
+    print("\n── Search Invalid Date Range ──")
+    code, body = _req("GET", "/v1/search?q=test&from=2026-01-10&to=2026-01-01")
+    check("from > to returns 400", code == 400, f"got {code}")
+    check("error mentions from/to", "from" in str(body.get("detail", "")).lower() or "to" in str(body.get("detail", "")).lower(),
+          f"detail={body.get('detail')}")
+
+
+def test_search_score_positive():
+    print("\n── Search Score Positive ──")
+    code, body = _req("GET", "/v1/search?q=test&top_k=3")
+    if code == 200 and body.get("hits"):
+        scores = [h.get("score", 0) for h in body["hits"]]
+        all_positive = all(s > 0 for s in scores)
+        check("all scores > 0", all_positive, f"scores={scores}")
+    else:
+        skip("search score check", "no hits returned")
+
+
+def test_macro_cached():
+    print("\n── Macro Cached ──")
+    # First call
+    t0 = time.time()
+    code1, _ = _req("GET", "/v1/macro/overview")
+    elapsed1 = time.time() - t0
+    if code1 == 400:
+        skip("macro cache test", "FRED_API_KEY not set")
+        return
+    # Second call (should hit cache)
+    t0 = time.time()
+    code2, _ = _req("GET", "/v1/macro/overview")
+    elapsed2 = time.time() - t0
+    check("first call returns 200", code1 == 200, f"got {code1}")
+    check("second call returns 200", code2 == 200, f"got {code2}")
+    # If first call was already cached (< 1s), just check second is also fast
+    if elapsed1 < 1.0:
+        check("both calls fast (cached)", elapsed2 < 1.0,
+              f"first={elapsed1:.1f}s, second={elapsed2:.1f}s")
+    else:
+        check("second call significantly faster", elapsed2 < elapsed1 * 0.5,
+              f"first={elapsed1:.1f}s, second={elapsed2:.1f}s")
+
+
 def test_logs_clean():
     print("\n── Logs ──")
     if not os.path.exists(LOG_FILE):
@@ -478,6 +558,13 @@ def main():
     test_kol_push_send(full=args.full)
     test_structured_api()
     test_structurize_dry_run()
+    test_equity_profile()
+    test_forex_quote()
+    test_options_chain()
+    test_macro_overview()
+    test_search_invalid_date_range()
+    test_search_score_positive()
+    test_macro_cached()
     test_logs_clean()
 
     elapsed = time.time() - t_start
