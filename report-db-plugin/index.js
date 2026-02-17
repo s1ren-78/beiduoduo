@@ -117,6 +117,28 @@ const BitableCreateSchema = Type.Object({
 
 const EmptySchema = Type.Object({});
 
+const StructuredReportsSchema = Type.Object({
+  company: Type.Optional(Type.String()),
+  sector: Type.Optional(Type.String()),
+  report_type: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+});
+
+const ThesesSchema = Type.Object({
+  company: Type.Optional(Type.String()),
+  direction: Type.Optional(Type.Union([
+    Type.Literal("bullish"), Type.Literal("bearish"), Type.Literal("neutral"),
+  ])),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 100 })),
+});
+
+const MetricsSchema = Type.Object({
+  company: Type.Optional(Type.String()),
+  ticker: Type.Optional(Type.String()),
+  metric: Type.Optional(Type.String()),
+  limit: Type.Optional(Type.Number({ minimum: 1, maximum: 200 })),
+});
+
 const plugin = {
   id: "openclaw-report-db",
   name: "Report DB",
@@ -351,6 +373,87 @@ const plugin = {
         },
       },
       { name: "bitable_create" },
+    );
+
+    // ── Structured Report Tools ──
+
+    api.registerTool(
+      {
+        name: "report_structured_list",
+        label: "Structured Reports",
+        description: "Search structured research reports by company, sector, or report type. Returns enriched metadata including summaries, quality scores, and classifications.",
+        parameters: StructuredReportsSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          if (params.company) query.set("company", params.company);
+          if (params.sector) query.set("sector", params.sector);
+          if (params.report_type) query.set("report_type", params.report_type);
+          if (params.limit) query.set("limit", String(params.limit));
+          return json(await request(api, `/v1/reports/structured?${query.toString()}`));
+        },
+      },
+      { name: "report_structured_list" },
+    );
+
+    api.registerTool(
+      {
+        name: "report_structured_get",
+        label: "Structured Report Detail",
+        description: "Get a single report's full structured data: metadata, investment theses, and financial metrics.",
+        parameters: DocSchema,
+        async execute(_toolCallId, params) {
+          return json(await request(api, `/v1/reports/${encodeURIComponent(params.doc_id)}/structured`));
+        },
+      },
+      { name: "report_structured_get" },
+    );
+
+    api.registerTool(
+      {
+        name: "report_theses",
+        label: "Investment Theses",
+        description: "Search investment theses across all reports. Filter by company or direction (bullish/bearish/neutral). Use for questions like '哪些研报看多ETH' or 'bearish views on Coinbase'.",
+        parameters: ThesesSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          if (params.company) query.set("company", params.company);
+          if (params.direction) query.set("direction", params.direction);
+          if (params.limit) query.set("limit", String(params.limit));
+          return json(await request(api, `/v1/theses?${query.toString()}`));
+        },
+      },
+      { name: "report_theses" },
+    );
+
+    api.registerTool(
+      {
+        name: "report_metrics",
+        label: "Financial Metrics",
+        description: "Search financial metrics across all reports. Filter by company, ticker, or metric name. Use for questions like 'Coinbase收入' or 'ETH TVL data'.",
+        parameters: MetricsSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          if (params.company) query.set("company", params.company);
+          if (params.ticker) query.set("ticker", params.ticker);
+          if (params.metric) query.set("metric", params.metric);
+          if (params.limit) query.set("limit", String(params.limit));
+          return json(await request(api, `/v1/metrics?${query.toString()}`));
+        },
+      },
+      { name: "report_metrics" },
+    );
+
+    api.registerTool(
+      {
+        name: "report_structurize_stats",
+        label: "Structurize Stats",
+        description: "Check the progress of report structurization: how many reports have been processed for metadata, theses, and metrics extraction.",
+        parameters: EmptySchema,
+        async execute() {
+          return json(await request(api, "/v1/reports/stats"));
+        },
+      },
+      { name: "report_structurize_stats" },
     );
   },
 };

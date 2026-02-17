@@ -326,6 +326,56 @@ def test_kol_push_send(full: bool = False):
         check("kol_push runs", False, str(e))
 
 
+def test_structurize_dry_run():
+    print("\n── Structurize Dry Run ──")
+    try:
+        result = subprocess.run(
+            ["python3", "structurize.py", "--layer", "1", "--limit", "1", "--dry-run"],
+            cwd=API_DIR,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        check("structurize --dry-run exits 0", result.returncode == 0,
+              f"exit={result.returncode}, stderr={result.stderr[-300:]}")
+        if result.returncode == 0 and result.stdout.strip():
+            try:
+                data = json.loads(result.stdout)
+                check("output is valid JSON with doc_id", "doc_id" in data,
+                      f"keys={list(data.keys()) if isinstance(data, dict) else type(data)}")
+            except json.JSONDecodeError:
+                check("output is valid JSON", False, f"stdout[:200]={result.stdout[:200]}")
+        else:
+            skip("structurize output check", "no stdout or non-zero exit")
+    except subprocess.TimeoutExpired:
+        check("structurize --dry-run completes within 60s", False, "timeout")
+    except Exception as e:
+        check("structurize --dry-run runs", False, str(e))
+
+
+def test_structured_api():
+    print("\n── Structured Report API ──")
+    code, body = _req("GET", "/v1/reports/structured?limit=5")
+    check("GET /v1/reports/structured returns 200", code == 200, f"got {code}")
+    check("has data array", isinstance(body.get("data"), list), f"keys={list(body.keys())}")
+
+    code, body = _req("GET", "/v1/theses?limit=5")
+    check("GET /v1/theses returns 200", code == 200, f"got {code}")
+    check("has data array", isinstance(body.get("data"), list))
+
+    code, body = _req("GET", "/v1/metrics?limit=5")
+    check("GET /v1/metrics returns 200", code == 200, f"got {code}")
+    check("has data array", isinstance(body.get("data"), list))
+
+    code, body = _req("GET", "/v1/reports/stats")
+    check("GET /v1/reports/stats returns 200", code == 200, f"got {code}")
+    check("has total_eligible", "total_eligible" in body, f"keys={list(body.keys())}")
+
+    # 404 for non-existent doc
+    code, body = _req("GET", "/v1/reports/nonexistent-id/structured")
+    check("GET /v1/reports/{bad_id}/structured returns 404", code == 404, f"got {code}")
+
+
 def test_logs_clean():
     print("\n── Logs ──")
     if not os.path.exists(LOG_FILE):
@@ -426,6 +476,8 @@ def main():
     test_daily_push_send(full=args.full)
     test_kol_push_dry_run()
     test_kol_push_send(full=args.full)
+    test_structured_api()
+    test_structurize_dry_run()
     test_logs_clean()
 
     elapsed = time.time() - t_start

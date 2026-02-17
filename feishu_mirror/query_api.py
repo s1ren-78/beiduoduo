@@ -28,6 +28,13 @@ from lib.db_market import (
     upsert_quote_latest,
     upsert_watchlist,
 )
+from lib.db_structured import (
+    get_report_structured,
+    query_enriched_reports,
+    query_metrics,
+    query_theses,
+    structurize_stats,
+)
 from lib.jobs import (
     ensure_schema,
     run_all_sync,
@@ -496,6 +503,59 @@ def bitable_create(payload: BitableCreateRequest):
         "url": url,
         "records_created": records_created,
     }
+
+
+# ── Structured Report Endpoints ──
+
+
+@app.get("/v1/reports/structured")
+def reports_structured(
+    company: Optional[str] = None,
+    sector: Optional[str] = None,
+    report_type: Optional[str] = None,
+    limit: int = Query(20, ge=1, le=100),
+):
+    """List enriched reports filtered by company/sector/type."""
+    rows = query_enriched_reports(db, company=company, sector=sector, report_type=report_type, limit=limit)
+    return {"data": rows, "count": len(rows)}
+
+
+@app.get("/v1/reports/{doc_id}/structured")
+def report_structured(doc_id: str):
+    """Full structured data for a single report."""
+    result = get_report_structured(db, doc_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="structured data not found for this doc_id")
+    return result
+
+
+@app.get("/v1/theses")
+def theses(
+    company: Optional[str] = None,
+    direction: Optional[str] = Query(default=None, pattern="^(bullish|bearish|neutral)$"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Cross-report investment thesis query."""
+    rows = query_theses(db, company=company, direction=direction, limit=limit)
+    return {"data": rows, "count": len(rows)}
+
+
+@app.get("/v1/metrics")
+def metrics(
+    company: Optional[str] = None,
+    ticker: Optional[str] = None,
+    metric: Optional[str] = None,
+    limit: int = Query(50, ge=1, le=200),
+):
+    """Cross-report financial metrics query."""
+    rows = query_metrics(db, company=company, ticker=ticker, metric=metric, limit=limit)
+    return {"data": rows, "count": len(rows)}
+
+
+@app.get("/v1/reports/stats")
+def reports_stats():
+    """Structurization progress stats."""
+    return structurize_stats(db)
 
 
 if __name__ == "__main__":

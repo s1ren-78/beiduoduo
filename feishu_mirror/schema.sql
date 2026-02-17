@@ -201,3 +201,67 @@ CREATE INDEX IF NOT EXISTS idx_fin_statement_entity ON fin_statement(entity_id, 
 CREATE INDEX IF NOT EXISTS idx_onchain_protocol_daily ON onchain_protocol_daily(protocol, metric_date);
 CREATE INDEX IF NOT EXISTS idx_onchain_chain_daily ON onchain_chain_daily(chain, metric_date);
 CREATE INDEX IF NOT EXISTS idx_onchain_token_liquidity ON onchain_token_liquidity(token, chain, metric_date);
+
+-- ── Structured Report Enrichment Tables ──
+
+-- Layer 1: 研报元数据增强
+CREATE TABLE IF NOT EXISTS report_meta_enriched (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_id TEXT NOT NULL UNIQUE REFERENCES report_document(doc_id) ON DELETE CASCADE,
+  display_title TEXT,
+  companies TEXT NOT NULL DEFAULT '[]',
+  tickers TEXT NOT NULL DEFAULT '[]',
+  sectors TEXT NOT NULL DEFAULT '[]',
+  report_type TEXT,
+  language TEXT,
+  publish_date TEXT,
+  author TEXT,
+  source_org TEXT,
+  quality_score INTEGER,
+  summary TEXT,
+  model_used TEXT NOT NULL,
+  extracted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  meta TEXT NOT NULL DEFAULT '{}'
+);
+
+-- Layer 2: 投资论点
+CREATE TABLE IF NOT EXISTS report_thesis (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_id TEXT NOT NULL REFERENCES report_document(doc_id) ON DELETE CASCADE,
+  company TEXT NOT NULL,
+  ticker TEXT,
+  direction TEXT NOT NULL CHECK (direction IN ('bullish','bearish','neutral')),
+  confidence TEXT NOT NULL CHECK (confidence IN ('high','medium','low')),
+  time_horizon TEXT CHECK (time_horizon IN ('short','medium','long')),
+  thesis_text TEXT NOT NULL,
+  key_catalysts TEXT NOT NULL DEFAULT '[]',
+  key_risks TEXT NOT NULL DEFAULT '[]',
+  model_used TEXT NOT NULL,
+  extracted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  meta TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(doc_id, company)
+);
+
+-- Layer 3: 财务指标
+CREATE TABLE IF NOT EXISTS report_metric (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  doc_id TEXT NOT NULL REFERENCES report_document(doc_id) ON DELETE CASCADE,
+  company TEXT NOT NULL,
+  ticker TEXT,
+  period TEXT NOT NULL,
+  metric TEXT NOT NULL,
+  value REAL,
+  unit TEXT,
+  yoy_change REAL,
+  context TEXT,
+  model_used TEXT NOT NULL,
+  extracted_at TEXT NOT NULL DEFAULT (datetime('now')),
+  meta TEXT NOT NULL DEFAULT '{}',
+  UNIQUE(doc_id, company, period, metric)
+);
+
+CREATE INDEX IF NOT EXISTS idx_report_meta_enriched_doc ON report_meta_enriched(doc_id);
+CREATE INDEX IF NOT EXISTS idx_report_thesis_doc ON report_thesis(doc_id);
+CREATE INDEX IF NOT EXISTS idx_report_thesis_company ON report_thesis(company, direction);
+CREATE INDEX IF NOT EXISTS idx_report_metric_doc ON report_metric(doc_id);
+CREATE INDEX IF NOT EXISTS idx_report_metric_company ON report_metric(company, metric);
