@@ -243,8 +243,18 @@ const plugin = {
       if (event.durationMs) stat.totalMs += event.durationMs;
     });
 
-    // ── Hook: before_tool_call — param auto-correction ──
+    // ── Hook: before_tool_call — param auto-correction + guardrails ──
     api.on("before_tool_call", (event) => {
+      // Guardrail: block full sync without explicit confirmation flow
+      if (event.toolName === "report_sync_now") {
+        const p = event.params;
+        if (p.scope === "all" || p.mode === "full") {
+          return {
+            block: true,
+            blockReason: "全量同步(scope=all 或 mode=full)是高开销操作。请先向用户确认是否真的需要全量同步，建议使用 scope=feishu, mode=incremental 替代。",
+          };
+        }
+      }
       const corrected = correctParams(event.toolName, event.params);
       if (corrected) {
         return { params: corrected };
