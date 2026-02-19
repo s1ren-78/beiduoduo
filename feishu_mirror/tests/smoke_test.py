@@ -353,6 +353,61 @@ def test_structurize_dry_run():
         check("structurize --dry-run runs", False, str(e))
 
 
+def test_kol_watchlist():
+    print("\n── KOL Watchlist ──")
+    test_owner = "test_owner_001"
+
+    # GET list for default owner (should have seed data)
+    code, body = _req("GET", f"/v1/kol/watchlist?owner_id={OWNER_OPEN_ID}")
+    check("GET /v1/kol/watchlist returns 200", code == 200, f"got {code}")
+    check("has data array", isinstance(body.get("data"), list), f"keys={list(body.keys())}")
+    seed_count = len(body.get("data", []))
+    check("seed data loaded (>= 3)", seed_count >= 3, f"count={seed_count}")
+
+    # POST add new KOL for test_owner
+    code, body = _req("POST", "/v1/kol/watchlist", {
+        "name": "Test Person",
+        "title": "Test CEO",
+        "category": "tech",
+        "owner_id": test_owner,
+    })
+    check("POST add KOL returns 200", code == 200, f"got {code}")
+    check("response has kol_id", body.get("kol_id") == "test_person", f"kol_id={body.get('kol_id')}")
+    check("response has owner_id", body.get("owner_id") == test_owner, f"owner_id={body.get('owner_id')}")
+    check("search_queries auto-generated", isinstance(body.get("search_queries"), list) and len(body["search_queries"]) > 0)
+
+    # Verify test_owner sees it
+    code, body = _req("GET", f"/v1/kol/watchlist?owner_id={test_owner}")
+    test_enabled = len([r for r in body.get("data", []) if r.get("enabled")])
+    check("test_owner has 1 KOL", test_enabled == 1, f"count={test_enabled}")
+
+    # Verify default owner NOT affected
+    code, body = _req("GET", f"/v1/kol/watchlist?owner_id={OWNER_OPEN_ID}")
+    default_count = len(body.get("data", []))
+    check("default owner count unchanged", default_count == seed_count, f"was {seed_count}, now {default_count}")
+
+    # POST disable for test_owner
+    code, body = _req("POST", "/v1/kol/watchlist/disable", {"name": "Test Person", "owner_id": test_owner})
+    check("POST disable returns 200", code == 200, f"got {code}")
+    check("enabled is 0", body.get("enabled") == 0, f"enabled={body.get('enabled')}")
+
+    # Verify disabled
+    code, body = _req("GET", f"/v1/kol/watchlist?owner_id={test_owner}")
+    enabled_count = len([r for r in body.get("data", []) if r.get("enabled")])
+    check("test_owner enabled count is 0", enabled_count == 0, f"count={enabled_count}")
+
+    # 404 on non-existent
+    code, body = _req("POST", "/v1/kol/watchlist/disable", {"name": "nonexistent_person_xyz", "owner_id": test_owner})
+    check("disable non-existent returns 404", code == 404, f"got {code}")
+
+    # Category filter
+    code, body = _req("GET", f"/v1/kol/watchlist?owner_id={OWNER_OPEN_ID}&category=crypto")
+    check("category filter returns 200", code == 200, f"got {code}")
+    if body.get("data"):
+        all_crypto = all(r.get("category") == "crypto" for r in body["data"] if r.get("enabled"))
+        check("all results are crypto", all_crypto)
+
+
 def test_structured_api():
     print("\n── Structured Report API ──")
     code, body = _req("GET", "/v1/reports/structured?limit=5")
@@ -556,6 +611,7 @@ def main():
     test_daily_push_send(full=args.full)
     test_kol_push_dry_run()
     test_kol_push_send(full=args.full)
+    test_kol_watchlist()
     test_structured_api()
     test_structurize_dry_run()
     test_equity_profile()

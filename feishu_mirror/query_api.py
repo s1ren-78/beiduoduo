@@ -28,6 +28,13 @@ from lib.db_market import (
     upsert_quote_latest,
     upsert_watchlist,
 )
+from lib.db_kol import (
+    disable_kol,
+    get_distinct_owners,
+    get_kol_list,
+    seed_from_json as seed_kol_from_json,
+    upsert_kol,
+)
 from lib.db_structured import (
     get_report_structured,
     query_enriched_reports,
@@ -78,6 +85,20 @@ class WatchlistRequest(BaseModel):
     meta: Optional[dict] = None
 
 
+class KolWatchlistRequest(BaseModel):
+    name: str = Field(min_length=1)
+    title: str = ""
+    category: str = ""
+    search_queries: Optional[list[str]] = None
+    meta: Optional[dict] = None
+    owner_id: str = ""
+
+
+class KolDisableRequest(BaseModel):
+    name: str = Field(min_length=1)
+    owner_id: str = ""
+
+
 class ChartRenderRequest(BaseModel):
     chart_type: str = Field(pattern="^(line|multi_line|bar|candlestick)$")
     title: str = Field(min_length=1)
@@ -102,6 +123,14 @@ settings = load_settings(str(Path(__file__).parent / ".env"))
 ensure_runtime_dirs(settings)
 db = DB(settings.database_url)
 ensure_schema(db, Path(__file__).parent / "schema.sql")
+
+_DEFAULT_OWNER = "ou_ec332c4e35a82229099b7a04b89488ee"
+
+# Auto-seed KOL watchlist from JSON if table is empty
+if not get_kol_list(db):
+    _kol_json = Path(__file__).parent / "kol_config.json"
+    if _kol_json.exists():
+        seed_kol_from_json(db, _kol_json, owner_id=_DEFAULT_OWNER)
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s:%(name)s: %(message)s")
 app = FastAPI(title="Beiduoduo Report Query API", version="1.0.0")
@@ -438,6 +467,40 @@ def watchlist_post(payload: WatchlistRequest):
         meta=payload.meta,
     )
     return {"id": wid, "symbol": payload.symbol.upper(), "asset_class": payload.asset_class}
+
+
+# ── KOL Watchlist Endpoints ──
+
+
+@app.get("/v1/kol/watchlist")
+def kol_watchlist_get(
+    owner_id: Optional[str] = Query(default=None),
+    category: Optional[str] = Query(default=None),
+):
+    rows = get_kol_list(db, owner_id=owner_id, category=category, enabled_only=False)
+    return {"data": rows}
+
+
+@app.post("/v1/kol/watchlist")
+def kol_watchlist_post(payload: KolWatchlistRequest):
+    row = upsert_kol(
+        db,
+        owner_id=payload.owner_id,
+        name=payload.name,
+        title=payload.title,
+        category=payload.category,
+        search_queries=payload.search_queries,
+        meta=payload.meta,
+    )
+    return row
+
+
+@app.post("/v1/kol/watchlist/disable")
+def kol_watchlist_disable(payload: KolDisableRequest):
+    row = disable_kol(db, owner_id=payload.owner_id, name_or_id=payload.name)
+    if not row:
+        raise HTTPException(status_code=404, detail=f"KOL not found: {payload.name}")
+    return row
 
 
 # ── Chart & Bitable Endpoints ──

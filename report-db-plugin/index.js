@@ -143,6 +143,23 @@ const OptionsChainSchema = Type.Object({
   expiry: Type.Optional(Type.String()),
 });
 
+const KolWatchlistAddSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  title: Type.Optional(Type.String()),
+  category: Type.Optional(Type.String()),
+  owner_id: Type.Optional(Type.String({ description: "Auto-injected by hook — do not fill manually" })),
+});
+
+const KolWatchlistRemoveSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  owner_id: Type.Optional(Type.String({ description: "Auto-injected by hook — do not fill manually" })),
+});
+
+const KolWatchlistListSchema = Type.Object({
+  category: Type.Optional(Type.String()),
+  owner_id: Type.Optional(Type.String({ description: "Auto-injected by hook — do not fill manually" })),
+});
+
 const EmptySchema = Type.Object({});
 
 const StructuredReportsSchema = Type.Object({
@@ -229,12 +246,22 @@ function truncateArrayInObj(obj) {
   return obj;
 }
 
+// ── Per-session sender tracking (for owner_id injection) ──
+let _lastSender = null;
+
 const plugin = {
   id: "openclaw-report-db",
   name: "Report DB",
   description: "Beiduoduo local report query tools",
   configSchema: emptyPluginConfigSchema(),
   register(api) {
+    // ── Hook: message_received — capture sender open_id ──
+    api.on("message_received", (event) => {
+      if (event.from) {
+        _lastSender = event.from;
+      }
+    });
+
     // ── Hook: after_tool_call — statistics ──
     api.on("after_tool_call", (event) => {
       const stat = getToolStat(event.toolName);
@@ -243,7 +270,7 @@ const plugin = {
       if (event.durationMs) stat.totalMs += event.durationMs;
     });
 
-    // ── Hook: before_tool_call — param auto-correction + guardrails ──
+    // ── Hook: before_tool_call — param auto-correction + guardrails + owner_id injection ──
     api.on("before_tool_call", (event) => {
       // Guardrail: block full sync without explicit confirmation flow
       if (event.toolName === "report_sync_now") {
@@ -255,6 +282,13 @@ const plugin = {
           };
         }
       }
+
+      // Auto-inject owner_id for KOL watchlist tools
+      if (event.toolName.startsWith("kol_watchlist_") && _lastSender) {
+        const corrected = correctParams(event.toolName, event.params);
+        return { params: { ...(corrected || event.params), owner_id: _lastSender } };
+      }
+
       const corrected = correctParams(event.toolName, event.params);
       if (corrected) {
         return { params: corrected };
@@ -674,6 +708,66 @@ const plugin = {
         },
       },
       { name: "bitable_create" },
+    );
+
+    // ── KOL Watchlist Tools ──
+
+    api.registerTool(
+      {
+        name: "kol_watchlist_add",
+        label: "KOL Watchlist Add",
+        description: "Add a person to the KOL observation list. Use when user says '帮我关注 Sam Altman' or 'add Elon Musk to watchlist'. Provide name (required), title (e.g. 'OpenAI CEO'), and category (crypto/tech/ai/macro).",
+        parameters: KolWatchlistAddSchema,
+        async execute(_toolCallId, params) {
+          const body = { name: params.name };
+          if (params.title) body.title = params.title;
+          if (params.category) body.category = params.category;
+          if (params.owner_id) body.owner_id = params.owner_id;
+          return json(
+            await request(api, "/v1/kol/watchlist", {
+              method: "POST",
+              body: JSON.stringify(body),
+            }),
+          );
+        },
+      },
+      { name: "kol_watchlist_add" },
+    );
+
+    api.registerTool(
+      {
+        name: "kol_watchlist_remove",
+        label: "KOL Watchlist Remove",
+        description: "Remove a person from the KOL observation list (soft delete). Use when user says '不要关注 Vitalik 了' or '把 XX 从名单里删了'.",
+        parameters: KolWatchlistRemoveSchema,
+        async execute(_toolCallId, params) {
+          const body = { name: params.name };
+          if (params.owner_id) body.owner_id = params.owner_id;
+          return json(
+            await request(api, "/v1/kol/watchlist/disable", {
+              method: "POST",
+              body: JSON.stringify(body),
+            }),
+          );
+        },
+      },
+      { name: "kol_watchlist_remove" },
+    );
+
+    api.registerTool(
+      {
+        name: "kol_watchlist_list",
+        label: "KOL Watchlist List",
+        description: "List all people in your KOL observation list. Use when user says '看看我的观察名单' or '我在关注谁'. Optional category filter (crypto/tech/ai/macro). Each user sees only their own list.",
+        parameters: KolWatchlistListSchema,
+        async execute(_toolCallId, params) {
+          const query = new URLSearchParams();
+          if (params.category) query.set("category", params.category);
+          if (params.owner_id) query.set("owner_id", params.owner_id);
+          return json(await request(api, `/v1/kol/watchlist?${query.toString()}`));
+        },
+      },
+      { name: "kol_watchlist_list" },
     );
 
     // ── Structured Report Tools ──

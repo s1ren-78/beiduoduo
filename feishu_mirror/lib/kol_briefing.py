@@ -47,8 +47,41 @@ class KolSummary:
 # ── Config ──
 
 
-def load_kol_config() -> tuple[list[KolConfig], dict]:
-    """Load KOL list + settings from JSON config."""
+def load_kol_config(db=None, owner_id: str | None = None) -> tuple[list[KolConfig], dict]:
+    """Load KOL list + settings.
+
+    If db is provided, read from DB (filtered by owner_id if given).
+    Otherwise fall back to kol_config.json.
+    Settings always come from JSON.
+    """
+    # Try DB first
+    if db is not None:
+        try:
+            from .db_kol import get_kol_list
+            rows = get_kol_list(db, owner_id=owner_id, enabled_only=True)
+            if rows:
+                kols = []
+                for r in rows:
+                    queries = r.get("search_queries", [])
+                    if isinstance(queries, str):
+                        queries = json.loads(queries)
+                    kols.append(KolConfig(
+                        id=r["kol_id"],
+                        name=r["name"],
+                        title=r.get("title", ""),
+                        search_queries=queries or [r["name"]],
+                        category=r.get("category", ""),
+                    ))
+                # Settings always from JSON
+                settings = {}
+                if CONFIG_PATH.exists():
+                    with open(CONFIG_PATH, encoding="utf-8") as f:
+                        settings = json.load(f).get("settings", {})
+                return kols, settings
+        except Exception as e:
+            logger.warning("Failed to load KOLs from DB, falling back to JSON: %s", e)
+
+    # Fallback: JSON
     with open(CONFIG_PATH, encoding="utf-8") as f:
         raw = json.load(f)
 

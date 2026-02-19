@@ -194,7 +194,24 @@ CREATE INDEX IF NOT EXISTS idx_report_chunk_doc ON report_chunk(doc_id, chunk_in
 CREATE INDEX IF NOT EXISTS idx_report_sync_run_status_time ON report_sync_run(status, created_at);
 CREATE INDEX IF NOT EXISTS idx_report_whitelist_enabled ON report_whitelist(enabled, entry_type);
 
+CREATE TABLE IF NOT EXISTS kol_watchlist (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  owner_id TEXT NOT NULL DEFAULT '',
+  kol_id TEXT NOT NULL,
+  name TEXT NOT NULL,
+  title TEXT NOT NULL DEFAULT '',
+  category TEXT NOT NULL DEFAULT '',
+  search_queries TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  meta TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE(owner_id, kol_id)
+);
+
 CREATE INDEX IF NOT EXISTS idx_market_watchlist_enabled ON market_watchlist(enabled, asset_class);
+CREATE INDEX IF NOT EXISTS idx_kol_watchlist_enabled ON kol_watchlist(enabled, category);
+CREATE INDEX IF NOT EXISTS idx_kol_watchlist_owner ON kol_watchlist(owner_id, enabled);
 CREATE INDEX IF NOT EXISTS idx_market_price_daily_symbol ON market_price_daily(symbol, asset_class, trade_date);
 CREATE INDEX IF NOT EXISTS idx_market_quote_latest_symbol ON market_quote_latest(symbol, asset_class);
 CREATE INDEX IF NOT EXISTS idx_fin_statement_entity ON fin_statement(entity_id, entity_type, period);
